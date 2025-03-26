@@ -5,6 +5,8 @@ import sys
 import os
 import yaml
 import time
+import win32gui
+import win32con
 
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -33,9 +35,18 @@ class GestureController:
         self.prev_frame_time = 0
         self.new_frame_time = 0
         self.fps = 0
-        self.fps_update_interval = 0.5  # 每0.5秒更新一次FPS
+        self.fps_update_interval = 1  # 每1秒更新一次FPS
         self.last_fps_update = time.time()
         self.frame_count = 0
+        
+        # 创建窗口
+        self.window_name = self.config['visualization']['window_name']
+        cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+        # 设置窗口置顶
+        hwnd = win32gui.FindWindow(None, self.window_name)
+        if hwnd:
+            win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
         
     def _load_config(self, config_path: str) -> dict:
         """加载配置文件"""
@@ -84,9 +95,22 @@ class GestureController:
                      (bar_x + bar_width, bar_y + bar_height),
                      (0, 0, 0), 2)
         
+        # 显示开合度数值
+        openness_text = f"Openness: {openness:.2f}"
+        cv2.putText(frame, openness_text, (bar_x + bar_width + 10, bar_y + bar_height),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+        
         # 绘制FPS
         cv2.putText(frame, f"FPS: {self.fps:.1f}", (width - 150, 30),
                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        
+        # 显示最新状态
+        last_state = self.analyzer.last_state
+        current_state = self.analyzer.current_state
+        if last_state and current_state:
+            state_text = f"Last: {last_state}, Current: {current_state}"
+            cv2.putText(frame, state_text, (10, height - 70),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
         
         return frame
     
@@ -103,6 +127,9 @@ class GestureController:
     def run(self):
         """运行手势控制系统"""
         try:
+            print("按Q键退出程序")
+            print("等待检测到手势...")
+            
             while self.running:
                 # 读取图像帧
                 frame = self.camera.read_frame()
@@ -114,17 +141,24 @@ class GestureController:
                 self._update_fps()
                 
                 # 分析手势
-                state, openness = self.analyzer.analyze_frame(frame)
+                state, openness, is_transition = self.analyzer.analyze_frame(frame)
                 
-                # 检查并触发动作
-                if state and self.analyzer.last_state:
-                    self.trigger.check_and_trigger(state, self.analyzer.last_state)
+                # 绘制手部关键点
+                frame = self.analyzer.draw_landmarks(frame)
+                
+                # 检查并触发动作 - 只在状态转换时触发
+                if is_transition:
+                    triggered = self.trigger.trigger_space()
+                    print("触发空格键!")
+                    # 在画面上显示触发提示
+                    cv2.putText(frame, "TRIGGERED!", (frame.shape[1]//2 - 100, frame.shape[0]//2),
+                              cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
                 
                 # 绘制UI
                 frame = self._draw_ui(frame, state, openness)
                 
                 # 显示图像
-                cv2.imshow(self.config['visualization']['window_name'], frame)
+                cv2.imshow(self.window_name, frame)
                 
                 # 检查退出条件
                 if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -132,6 +166,8 @@ class GestureController:
                     
         except KeyboardInterrupt:
             print("\n程序被用户中断")
+        except Exception as e:
+            print(f"发生错误: {e}")
         finally:
             self.cleanup()
     
@@ -139,6 +175,7 @@ class GestureController:
         """清理资源"""
         self.camera.release()
         cv2.destroyAllWindows()
+        print("程序已退出")
 
 def main():
     """主函数"""
@@ -147,4 +184,4 @@ def main():
     controller.run()
 
 if __name__ == "__main__":
-    main() 
+    main()

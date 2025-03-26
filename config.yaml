@@ -1,7 +1,8 @@
 thresholds:
-  fist_max: 0.25  # 握拳阈值上限
-  open_min: 0.65  # 张开阈值下限
+  fist_max: 0.2  # 握拳阈值上限
+  open_min: 0.65 # 张开阈值下限
 cooldown: 1.0      # 冷却时间
+use_system_cmd: false  # 使用系统命令触发按键
 camera:
   id: 0
   width: 640

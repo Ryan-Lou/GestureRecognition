@@ -26,6 +26,9 @@ class GestureAnalyzer:
         self.state_counter = 0
         self.current_state = None
         self.last_state = None
+        self.last_results = None
+        self.last_confirmed_state = None  # 添加最后确认的状态
+        self.transition_detected = False  # 添加状态转换标记
         
     def _load_config(self, config_path: str) -> dict:
         """加载配置文件"""
@@ -56,15 +59,37 @@ class GestureAnalyzer:
             np.array(landmarks[20])  # 小指
         ]
         
-        # 计算平均距离
-        distances = [np.linalg.norm(tip - wrist) for tip in fingertips]
-        avg_distance = np.mean(distances)
+        # 获取对应的指根点
+        finger_bases = [
+            np.array(landmarks[5]),  # 食指根
+            np.array(landmarks[9]),  # 中指根
+            np.array(landmarks[13]), # 无名指根
+            np.array(landmarks[17])  # 小指根
+        ]
         
-        # 归一化处理
-        max_distance = np.sqrt(2)  # 最大可能距离（对角线）
-        return min(avg_distance / max_distance, 1.0)
+        # 计算每个手指的开合度
+        finger_openness = []
+        for tip, base in zip(fingertips, finger_bases):
+            # 计算指尖到指根的距离
+            tip_to_base = np.linalg.norm(tip - base)
+            # 计算指根到手腕的距离
+            base_to_wrist = np.linalg.norm(base - wrist)
+            # 计算开合度（指尖到指根的距离 / 指根到手腕的距离）
+            openness = tip_to_base / base_to_wrist
+            finger_openness.append(openness)
+        
+        # 计算平均开合度
+        avg_openness = np.mean(finger_openness)
+        
+        # 归一化处理（根据实际测试调整范围）
+        min_openness = 0.3  # 最小开合度（握拳状态）
+        max_openness = 1.2  # 最大开合度（完全张开状态）
+        
+        # 将开合度映射到0-1范围
+        normalized_openness = (avg_openness - min_openness) / (max_openness - min_openness)
+        return max(0.0, min(1.0, normalized_openness))
     
-    def analyze_frame(self, frame: np.ndarray) -> Tuple[Optional[str], float]:
+    def analyze_frame(self, frame: np.ndarray) -> Tuple[Optional[str], float, bool]:
         """
         分析单帧图像中的手势
         
@@ -72,19 +97,22 @@ class GestureAnalyzer:
             frame: 输入图像帧
             
         Returns:
-            Tuple[Optional[str], float]: (手势状态, 开合度)
+            Tuple[Optional[str], float, bool]: (手势状态, 开合度, 是否是状态转换)
         """
         # 转换颜色空间
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
         # 处理图像
-        results = self.hands.process(rgb_frame)
+        self.last_results = self.hands.process(rgb_frame)
         
-        if not results.multi_hand_landmarks:
-            return None, 0.0
+        # 重置转换标记
+        self.transition_detected = False
+        
+        if not self.last_results.multi_hand_landmarks:
+            return None, 0.0, False
             
         # 获取第一个检测到的手
-        hand_landmarks = results.multi_hand_landmarks[0]
+        hand_landmarks = self.last_results.multi_hand_landmarks[0]
         
         # 计算开合度
         landmarks = [(lm.x, lm.y, lm.z) for lm in hand_landmarks.landmark]
@@ -104,31 +132,47 @@ class GestureAnalyzer:
             self.state_counter += 1
         else:
             self.state_counter = 1
-            self.last_state = self.current_state
             self.current_state = new_state
             
-        # 需要连续5帧相同状态才确认
-        if self.state_counter >= 5:
-            return self.current_state, openness
+        # 需要连续3帧相同状态才确认
+        required_frames = 3  # 减少确认帧数，提高灵敏度
+        
+        if self.state_counter >= required_frames:
+            # 检测状态转换的瞬间
+            if self.last_confirmed_state != self.current_state:
+                # 记录最后确认的状态
+                prev_state = self.last_confirmed_state
+                self.last_confirmed_state = self.current_state
+                
+                # 只有当从open到fist状态转换时设置last_state
+                if prev_state == 'open' and self.current_state == 'fist':
+                    self.last_state = prev_state
+                    self.transition_detected = True
+                    print(f"状态变化: {prev_state} -> {self.current_state} (触发)")
+                else:
+                    print(f"状态变化: {prev_state} -> {self.current_state} (不触发)")
+                
+                return self.current_state, openness, self.transition_detected
+                
+            return self.current_state, openness, False
             
-        return None, openness
+        return None, openness, False
     
-    def draw_landmarks(self, frame: np.ndarray, results) -> np.ndarray:
+    def draw_landmarks(self, frame: np.ndarray) -> np.ndarray:
         """
         在图像上绘制手部关键点
         
         Args:
             frame: 输入图像帧
-            results: MediaPipe处理结果
             
         Returns:
             np.ndarray: 绘制了关键点的图像帧
         """
-        if results.multi_hand_landmarks:
-            for hand_landmarks in results.multi_hand_landmarks:
+        if self.last_results and self.last_results.multi_hand_landmarks:
+            for hand_landmarks in self.last_results.multi_hand_landmarks:
                 self.mp_draw.draw_landmarks(
                     frame,
                     hand_landmarks,
                     self.mp_hands.HAND_CONNECTIONS
                 )
-        return frame 
+        return frame

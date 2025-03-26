@@ -2,6 +2,7 @@ from pynput.keyboard import Controller, Key
 import time
 from typing import Optional
 import yaml
+import os
 
 class ActionTrigger:
     """动作触发类，负责键盘事件的控制"""
@@ -23,30 +24,31 @@ class ActionTrigger:
         with open(config_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
     
-    def check_and_trigger(self, current_state: Optional[str], last_state: Optional[str]) -> bool:
+    def trigger_space(self) -> bool:
         """
-        检查并触发动作
+        触发空格键
         
-        Args:
-            current_state: 当前手势状态
-            last_state: 上一个手势状态
-            
         Returns:
-            bool: 是否触发了动作
+            bool: 是否成功触发
         """
-        # 检查状态转换
-        if (last_state == 'fist' and current_state == 'open'):
-            current_time = time.time()
+        current_time = time.time()
+        
+        # 检查冷却时间
+        if current_time - self.last_trigger_time < self.cooldown:
+            return False
             
-            # 检查冷却时间
-            if current_time - self.last_trigger_time >= self.cooldown:
-                self.trigger_space()
-                self.last_trigger_time = current_time
-                return True
+        try:
+            # 方法1: 使用pynput
+            self.keyboard.press(Key.space)
+            time.sleep(0.1)  # 增加延迟
+            self.keyboard.release(Key.space)
+            
+            # 方法2: 使用系统命令（备用方案）
+            if self.config.get('use_system_cmd', False):
+                os.system('powershell -command "$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys(\' \')"')
                 
-        return False
-    
-    def trigger_space(self) -> None:
-        """触发空格键"""
-        self.keyboard.press(Key.space)
-        self.keyboard.release(Key.space) 
+            self.last_trigger_time = current_time
+            return True
+        except Exception as e:
+            print(f"触发空格键出错: {e}")
+            return False 
