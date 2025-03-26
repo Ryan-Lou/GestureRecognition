@@ -47,6 +47,8 @@ class CameraManager:
         if not ret:
             return None
             
+        # 水平镜像翻转
+        frame = cv2.flip(frame, 1)
         return frame
     
     def release(self) -> None:

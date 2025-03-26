@@ -4,6 +4,7 @@ from typing import Optional
 import sys
 import os
 import yaml
+import time
 
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -27,6 +28,14 @@ class GestureController:
         self.analyzer = GestureAnalyzer(config_path)
         self.trigger = ActionTrigger(config_path)
         self.running = True
+        
+        # 帧率计算相关变量
+        self.prev_frame_time = 0
+        self.new_frame_time = 0
+        self.fps = 0
+        self.fps_update_interval = 0.5  # 每0.5秒更新一次FPS
+        self.last_fps_update = time.time()
+        self.frame_count = 0
         
     def _load_config(self, config_path: str) -> dict:
         """加载配置文件"""
@@ -75,7 +84,21 @@ class GestureController:
                      (bar_x + bar_width, bar_y + bar_height),
                      (0, 0, 0), 2)
         
+        # 绘制FPS
+        cv2.putText(frame, f"FPS: {self.fps:.1f}", (width - 150, 30),
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        
         return frame
+    
+    def _update_fps(self) -> None:
+        """更新帧率计算"""
+        current_time = time.time()
+        self.frame_count += 1
+        
+        if current_time - self.last_fps_update >= self.fps_update_interval:
+            self.fps = self.frame_count / (current_time - self.last_fps_update)
+            self.frame_count = 0
+            self.last_fps_update = current_time
     
     def run(self):
         """运行手势控制系统"""
@@ -86,6 +109,9 @@ class GestureController:
                 if frame is None:
                     print("无法读取摄像头画面")
                     break
+                
+                # 更新帧率
+                self._update_fps()
                 
                 # 分析手势
                 state, openness = self.analyzer.analyze_frame(frame)
