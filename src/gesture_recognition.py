@@ -4,27 +4,30 @@ import time  # time模块用于计算帧率
 # 初始化 MediaPipe Hands 模块
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
+    model_complexity=0,
     static_image_mode=False,  # 动态模式，适合实时视频流
     max_num_hands=2,  # 支持同时检测两只手
     min_detection_confidence=0.7,  # 最小检测置信度
     min_tracking_confidence=0.5   # 最小跟踪置信度
+
 )
 
 mp_draw = mp.solutions.drawing_utils  # 用于绘制关键点和骨架
 
-# 启动摄像头捕获
+# 打开摄像头（1080p）
 cap = cv2.VideoCapture(0)
-
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 # 记录前一帧的时间
 prev_time = time.time()
 
 while True:
-    success, frame = cap.read()
+    success, frame_1080p = cap.read()
     if not success:
         break
-
+    frame_720p = cv2.resize(frame_1080p, (1280, 720), interpolation=cv2.INTER_LINEAR)
     # 翻转图像，确保手势方向与用户一致
-    frame = cv2.flip(frame, 1)
+    frame = cv2.flip(frame_720p, 1)
 
     # 转换为 RGB 格式（MediaPipe 需要）
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
