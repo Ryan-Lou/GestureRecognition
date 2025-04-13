@@ -1,8 +1,9 @@
 import mediapipe as mp
 import numpy as np
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Dict, Any
 import yaml
 import cv2
+import time
 
 class GestureAnalyzer:
     """手势分析类，负责手势识别和状态判断"""
@@ -29,6 +30,19 @@ class GestureAnalyzer:
         self.last_results = None
         self.last_confirmed_state = None  # 添加最后确认的状态
         self.transition_detected = False  # 添加状态转换标记
+        
+        # V-sign手势相关变量
+        self.vsign_detected = False
+        self.last_vsign_position = None
+        self.vsign_start_time = None
+        self.vsign_direction = None
+        self.vsign_trigger_threshold = self.config.get('vsign_trigger_threshold', 0.1)  # 默认为屏幕宽度的10%
+        self.last_trigger_time = 0
+        self.cooldown = self.config['cooldown']
+        
+        # 手势轨迹跟踪
+        self.position_history = []
+        self.max_history_length = 10  # 保存最近10帧的位置
         
     def _load_config(self, config_path: str) -> dict:
         """加载配置文件"""
@@ -89,7 +103,156 @@ class GestureAnalyzer:
         normalized_openness = (avg_openness - min_openness) / (max_openness - min_openness)
         return max(0.0, min(1.0, normalized_openness))
     
-    def analyze_frame(self, frame: np.ndarray) -> Tuple[Optional[str], float, bool]:
+    def _is_vsign_gesture(self, landmarks: List[Tuple[float, float, float]]) -> bool:
+        """
+        检测是否是V-sign手势（食指与中指伸直并拢，其余手指收回）
+        
+        Args:
+            landmarks: 手部关键点列表
+            
+        Returns:
+            bool: 是否是V-sign手势
+        """
+        if not landmarks:
+            return False
+            
+        # 获取手指关键点
+        wrist = np.array(landmarks[0])
+        thumb_tip = np.array(landmarks[4])
+        index_tip = np.array(landmarks[8])
+        middle_tip = np.array(landmarks[12])
+        ring_tip = np.array(landmarks[16])
+        pinky_tip = np.array(landmarks[20])
+        
+        # 获取手指中间关节点
+        index_pip = np.array(landmarks[6])
+        middle_pip = np.array(landmarks[10])
+        ring_pip = np.array(landmarks[14])
+        pinky_pip = np.array(landmarks[18])
+        
+        # 获取手指指根点
+        index_mcp = np.array(landmarks[5])
+        middle_mcp = np.array(landmarks[9])
+        
+        # 计算各手指伸直程度（指尖到手腕的距离与指根到手腕的距离的比值）
+        index_extension = np.linalg.norm(index_tip - wrist) / np.linalg.norm(index_mcp - wrist)
+        middle_extension = np.linalg.norm(middle_tip - wrist) / np.linalg.norm(middle_mcp - wrist)
+        ring_extension = np.linalg.norm(ring_tip - wrist) / np.linalg.norm(ring_pip - wrist)
+        pinky_extension = np.linalg.norm(pinky_tip - wrist) / np.linalg.norm(pinky_pip - wrist)
+        
+        # 计算食指和中指的并拢程度
+        finger_closeness = np.linalg.norm(index_tip - middle_tip)
+        
+        # 判断V-sign手势条件：
+        # 1. 食指和中指伸直（伸直程度高）
+        # 2. 其他手指收回（伸直程度低）
+        # 3. 食指和中指并拢（距离近）
+        threshold_extension_high = 1.3  # 伸直手指的阈值
+        threshold_extension_low = 1.1   # 弯曲手指的阈值
+        threshold_closeness = 0.1       # 并拢手指的距离阈值
+        
+        is_vsign = (index_extension > threshold_extension_high and 
+                   middle_extension > threshold_extension_high and 
+                   ring_extension < threshold_extension_low and 
+                   pinky_extension < threshold_extension_low and 
+                   finger_closeness < threshold_closeness)
+                    
+        return is_vsign
+    
+    def _get_vsign_tracking_point(self, landmarks: List[Tuple[float, float, float]]) -> np.ndarray:
+        """
+        获取V-sign手势的跟踪点（食指和中指指尖的中点）
+        
+        Args:
+            landmarks: 手部关键点列表
+            
+        Returns:
+            np.ndarray: 跟踪点坐标
+        """
+        if not landmarks:
+            return np.array([0, 0, 0])
+            
+        # 获取食指和中指指尖
+        index_tip = np.array(landmarks[8])
+        middle_tip = np.array(landmarks[12])
+        
+        # 计算指尖中点位置
+        tracking_point = (index_tip + middle_tip) / 2
+        
+        return tracking_point
+    
+    def _detect_vsign_swipe(self, landmarks: List[Tuple[float, float, float]], frame_width: int) -> Tuple[bool, Optional[str]]:
+        """
+        检测V-sign手势的左右滑动
+        
+        Args:
+            landmarks: 手部关键点列表
+            frame_width: 帧宽度，用于计算相对移动距离
+            
+        Returns:
+            Tuple[bool, Optional[str]]: (是否触发滑动, 滑动方向)
+        """
+        if not landmarks:
+            return False, None
+            
+        # 检测是否是V-sign手势
+        is_vsign = self._is_vsign_gesture(landmarks)
+        
+        # 获取V-sign手势的跟踪点（食指和中指指尖的中点）
+        tracking_point = self._get_vsign_tracking_point(landmarks)
+        current_position = tracking_point[:2]  # 只取x,y坐标
+        
+        # 更新位置历史
+        self.position_history.append(current_position)
+        if len(self.position_history) > self.max_history_length:
+            self.position_history.pop(0)
+        
+        # 滑动判断结果
+        triggered = False
+        direction = None
+        
+        # 检测手势状态变化
+        if is_vsign:
+            # 首次检测到V-sign手势
+            if not self.vsign_detected:
+                self.vsign_detected = True
+                self.last_vsign_position = current_position
+                self.vsign_start_time = time.time()
+                self.vsign_direction = None
+            else:
+                # 计算水平移动距离
+                horizontal_movement = current_position[0] - self.last_vsign_position[0]
+                normalized_movement = horizontal_movement  # 相对于实际坐标系统的移动（0-1范围）
+                
+                # 计算移动距离相对于屏幕宽度的比例
+                movement_ratio = abs(normalized_movement)
+                
+                # 检查是否超过触发阈值
+                current_time = time.time()
+                if (movement_ratio > self.vsign_trigger_threshold and 
+                    current_time - self.last_trigger_time > self.cooldown):
+                    
+                    if horizontal_movement > 0:
+                        direction = "right"
+                    else:
+                        direction = "left"
+                        
+                    # 只有当方向确定且与上次不同或已重置时才触发
+                    if self.vsign_direction is None or self.vsign_direction != direction:
+                        self.vsign_direction = direction
+                        triggered = True
+                        self.last_trigger_time = current_time
+                        # 重置起始位置，为下一次滑动做准备
+                        self.last_vsign_position = current_position
+        else:
+            # 如果不再是V-sign手势，重置状态
+            if self.vsign_detected:
+                self.vsign_detected = False
+                self.vsign_direction = None
+                
+        return triggered, direction
+    
+    def analyze_frame(self, frame: np.ndarray) -> Tuple[Optional[str], float, bool, Dict[str, Any]]:
         """
         分析单帧图像中的手势
         
@@ -97,8 +260,11 @@ class GestureAnalyzer:
             frame: 输入图像帧
             
         Returns:
-            Tuple[Optional[str], float, bool]: (手势状态, 开合度, 是否是状态转换)
+            Tuple[Optional[str], float, bool, Dict[str, Any]]: 
+                (手势状态, 开合度, 是否是状态转换, 额外手势信息)
         """
+        frame_height, frame_width = frame.shape[:2]
+        
         # 转换颜色空间
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
@@ -108,17 +274,27 @@ class GestureAnalyzer:
         # 重置转换标记
         self.transition_detected = False
         
+        # 额外手势信息
+        extra_gestures = {
+            "vsign_detected": False,
+            "vsign_swiped": False,
+            "swipe_direction": None,
+            "tracking_point": None
+        }
+        
         if not self.last_results.multi_hand_landmarks:
-            return None, 0.0, False
+            return None, 0.0, False, extra_gestures
             
         # 获取第一个检测到的手
         hand_landmarks = self.last_results.multi_hand_landmarks[0]
         
-        # 计算开合度
+        # 提取关键点坐标
         landmarks = [(lm.x, lm.y, lm.z) for lm in hand_landmarks.landmark]
+        
+        # 计算开合度
         openness = self._calculate_openness(landmarks)
         
-        # 判断状态
+        # 判断基本状态
         thresholds = self.config['thresholds']
         if openness <= thresholds['fist_max']:
             new_state = 'fist'
@@ -126,7 +302,21 @@ class GestureAnalyzer:
             new_state = 'open'
         else:
             new_state = None
+        
+        # 检测V-sign手势和滑动
+        is_vsign = self._is_vsign_gesture(landmarks)
+        extra_gestures["vsign_detected"] = is_vsign
+        
+        # 如果是V-sign手势，获取跟踪点并检测滑动
+        if is_vsign:
+            tracking_point = self._get_vsign_tracking_point(landmarks)
+            extra_gestures["tracking_point"] = tracking_point
             
+            swiped, direction = self._detect_vsign_swipe(landmarks, frame_width)
+            if swiped:
+                extra_gestures["vsign_swiped"] = True
+                extra_gestures["swipe_direction"] = direction
+        
         # 状态防抖
         if new_state == self.current_state:
             self.state_counter += 1
@@ -152,22 +342,24 @@ class GestureAnalyzer:
                 else:
                     print(f"状态变化: {prev_state} -> {self.current_state} (不触发)")
                 
-                return self.current_state, openness, self.transition_detected
+                return self.current_state, openness, self.transition_detected, extra_gestures
                 
-            return self.current_state, openness, False
+            return self.current_state, openness, False, extra_gestures
             
-        return None, openness, False
+        return None, openness, False, extra_gestures
     
-    def draw_landmarks(self, frame: np.ndarray) -> np.ndarray:
+    def draw_landmarks(self, frame: np.ndarray, extra_info: Dict[str, Any] = None) -> np.ndarray:
         """
-        在图像上绘制手部关键点
+        在图像上绘制手部关键点和额外信息
         
         Args:
             frame: 输入图像帧
+            extra_info: 额外信息，如手势类型、滑动方向等
             
         Returns:
             np.ndarray: 绘制了关键点的图像帧
         """
+        # 绘制手部关键点
         if self.last_results and self.last_results.multi_hand_landmarks:
             for hand_landmarks in self.last_results.multi_hand_landmarks:
                 self.mp_draw.draw_landmarks(
@@ -175,4 +367,48 @@ class GestureAnalyzer:
                     hand_landmarks,
                     self.mp_hands.HAND_CONNECTIONS
                 )
+                
+            # 如果检测到V-sign手势，标记出来
+            if extra_info and extra_info.get("vsign_detected", False):
+                height, width = frame.shape[:2]
+                landmarks = hand_landmarks.landmark
+                
+                # 获取食指和中指指尖位置
+                index_tip = (int(landmarks[8].x * width), int(landmarks[8].y * height))
+                middle_tip = (int(landmarks[12].x * width), int(landmarks[12].y * height))
+                
+                # 计算指尖中点位置（跟踪点）
+                tracking_point = (
+                    (index_tip[0] + middle_tip[0]) // 2,
+                    (index_tip[1] + middle_tip[1]) // 2
+                )
+                
+                # 绘制指尖标记
+                cv2.circle(frame, index_tip, 8, (0, 255, 255), -1)
+                cv2.circle(frame, middle_tip, 8, (0, 255, 255), -1)
+                
+                # 绘制跟踪点（较大圆圈）
+                cv2.circle(frame, tracking_point, 12, (255, 0, 255), -1)
+                
+                # 如果有滑动，显示方向
+                if extra_info.get("vsign_swiped", False):
+                    direction = extra_info.get("swipe_direction")
+                    if direction:
+                        direction_text = f"Swipe: {direction}"
+                        cv2.putText(frame, direction_text, (10, 60),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 2)
+                
+                # 显示手势类型
+                cv2.putText(frame, "V-Sign", (width - 150, 60),
+                          cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 2)
+                
+            # 绘制轨迹
+            if len(self.position_history) >= 2:
+                for i in range(1, len(self.position_history)):
+                    pt1 = (int(self.position_history[i-1][0] * frame.shape[1]), 
+                          int(self.position_history[i-1][1] * frame.shape[0]))
+                    pt2 = (int(self.position_history[i][0] * frame.shape[1]), 
+                          int(self.position_history[i][1] * frame.shape[0]))
+                    cv2.line(frame, pt1, pt2, (0, 255, 0), 2)
+                
         return frame

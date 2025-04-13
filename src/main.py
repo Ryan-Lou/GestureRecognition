@@ -53,7 +53,7 @@ class GestureController:
         with open(config_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
     
-    def _draw_ui(self, frame: np.ndarray, state: Optional[str], openness: float) -> np.ndarray:
+    def _draw_ui(self, frame: np.ndarray, state: Optional[str], openness: float, extra_info=None) -> np.ndarray:
         """
         绘制用户界面
         
@@ -61,6 +61,7 @@ class GestureController:
             frame: 输入图像帧
             state: 当前手势状态
             openness: 手掌开合度
+            extra_info: 额外手势信息
             
         Returns:
             np.ndarray: 绘制了UI的图像帧
@@ -111,6 +112,18 @@ class GestureController:
             state_text = f"Last: {last_state}, Current: {current_state}"
             cv2.putText(frame, state_text, (10, height - 70),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+            
+        # 显示手势说明
+        instructions = [
+            "Gestures:",
+            "1. Open -> Fist: Space",
+            "2. V-Sign Right: Forward",
+            "3. V-Sign Left: Backward"
+        ]
+        
+        for i, text in enumerate(instructions):
+            cv2.putText(frame, text, (width - 250, 90 + i * 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
         
         return frame
     
@@ -129,6 +142,10 @@ class GestureController:
         try:
             print("按Q键退出程序")
             print("等待检测到手势...")
+            print("支持的手势：")
+            print("1. 从张开到握拳：触发空格键")
+            print("2. V手势向右滑动：触发右方向键")
+            print("3. V手势向左滑动：触发左方向键")
             
             while self.running:
                 # 读取图像帧
@@ -141,21 +158,31 @@ class GestureController:
                 self._update_fps()
                 
                 # 分析手势
-                state, openness, is_transition = self.analyzer.analyze_frame(frame)
+                state, openness, is_transition, extra_gestures = self.analyzer.analyze_frame(frame)
                 
                 # 绘制手部关键点
-                frame = self.analyzer.draw_landmarks(frame)
+                frame = self.analyzer.draw_landmarks(frame, extra_gestures)
                 
-                # 检查并触发动作 - 只在状态转换时触发
+                # 检查并触发动作 - 从张开到握拳触发空格键
                 if is_transition:
                     triggered = self.trigger.trigger_space()
                     print("触发空格键!")
                     # 在画面上显示触发提示
-                    cv2.putText(frame, "TRIGGERED!", (frame.shape[1]//2 - 100, frame.shape[0]//2),
+                    cv2.putText(frame, "SPACE!", (frame.shape[1]//2 - 100, frame.shape[0]//2),
                               cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
                 
+                # 检查V手势滑动手势
+                if extra_gestures.get("vsign_swiped", False):
+                    direction = extra_gestures.get("swipe_direction")
+                    if direction:
+                        self.trigger.trigger_direction_key(direction)
+                        # 在画面上显示触发提示
+                        display_text = f"{direction.upper()}!"
+                        cv2.putText(frame, display_text, (frame.shape[1]//2 - 100, frame.shape[0]//2 + 50),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 0, 0), 3)
+                
                 # 绘制UI
-                frame = self._draw_ui(frame, state, openness)
+                frame = self._draw_ui(frame, state, openness, extra_gestures)
                 
                 # 显示图像
                 cv2.imshow(self.window_name, frame)

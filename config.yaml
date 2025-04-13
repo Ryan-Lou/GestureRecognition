@@ -1,8 +1,10 @@
 thresholds:
-  fist_max: 0.2  # 握拳阈值上限
-  open_min: 0.65 # 张开阈值下限
-cooldown: 1.0      # 冷却时间
+  fist_max: 0.3  # 握拳阈值上限
+  open_min: 0.7  # 张开阈值下限
+cooldown: 1.0      # 冷却时间（秒）
 use_system_cmd: false  # 使用系统命令触发按键
+vsign_trigger_threshold: 0.1  # V-sign手势滑动触发阈值（屏幕宽度的10%）
+
 camera:
   id: 0
   width: 640
