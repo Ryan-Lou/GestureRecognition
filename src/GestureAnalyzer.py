@@ -236,9 +236,6 @@ class GestureAnalyzer:
         if not landmarks:
             return False, None
             
-        # 检测是否是V-sign手势
-        is_vsign = self._is_vsign_gesture(landmarks)
-        
         # 获取V-sign手势的跟踪点（食指和中指指尖的中点）
         tracking_point = self._get_vsign_tracking_point(landmarks)
         current_position = tracking_point[:2]  # 只取x,y坐标
@@ -252,71 +249,62 @@ class GestureAnalyzer:
         triggered = False
         direction = None
         
-        # 检测手势状态变化
-        if is_vsign:
-            # 首次检测到V-sign手势
-            if not self.vsign_detected:
-                self.vsign_detected = True
-                self.last_vsign_position = current_position
-                self.vsign_start_time = time.time()
-                self.vsign_direction = None
-                self.direction_locked = False  # 重置方向锁定
-                self.swipe_complete = False    # 重置滑动完成标记
-            else:
-                # 计算水平移动距离
-                horizontal_movement = current_position[0] - self.last_vsign_position[0]
-                normalized_movement = horizontal_movement  # 相对于实际坐标系统的移动（0-1范围）
-                
-                # 计算移动距离相对于屏幕宽度的比例
-                movement_ratio = abs(normalized_movement)
-                
-                # 计算当前位置与屏幕中心的距离
-                distance_to_center = abs(current_position[0] - self.center_position)
-                
-                # 判断是否在复位过程中（接近屏幕中心）
-                is_resetting = distance_to_center < self.reset_threshold
-                
-                # 检查是否超过触发阈值，且未处于方向锁定状态
-                current_time = time.time()
-                if (movement_ratio > self.vsign_trigger_threshold and 
-                    current_time - self.last_trigger_time > self.cooldown and
-                    not self.direction_locked and not self.swipe_complete):
-                    
-                    if horizontal_movement > 0:
-                        direction = "right"
-                    else:
-                        direction = "left"
-                        
-                    # 只有当方向确定且与上次不同或已重置时才触发
-                    if self.vsign_direction is None or self.vsign_direction != direction:
-                        self.vsign_direction = direction
-                        triggered = True
-                        self.last_trigger_time = current_time
-                        # 锁定方向，防止复位过程中误触发
-                        self.direction_locked = True
-                        self.swipe_complete = True  # 标记滑动已完成
-                        # 输出终端信息（根据配置决定是否显示）
-                        if self.config.get('console_output', {}).get('show_vsign_events', True):
-                            print(f"锁定方向: {direction}，等待复位")
-                        # 重置起始位置，为下一次滑动做准备
-                        self.last_vsign_position = current_position
-                
-                # 如果已经完成滑动且接近中心位置，解锁方向锁定
-                if self.swipe_complete and is_resetting:
-                    self.direction_locked = False
-                    self.swipe_complete = False
-                    self.vsign_direction = None
-                    # 输出终端信息（根据配置决定是否显示）
-                    if self.config.get('console_output', {}).get('show_reset_events', True):
-                        print("复位完成，解除方向锁定")
-                    self.last_vsign_position = current_position
+        # 如果是第一次检测到V-sign，初始化位置
+        if not self.vsign_detected:
+            self.vsign_detected = True
+            self.last_vsign_position = current_position
+            self.vsign_start_time = time.time()
+            self.vsign_direction = None
+            self.direction_locked = False  # 重置方向锁定
+            self.swipe_complete = False    # 重置滑动完成标记
         else:
-            # 如果不再是V-sign手势，重置所有状态
-            if self.vsign_detected:
-                self.vsign_detected = False
-                self.vsign_direction = None
+            # 计算水平移动距离
+            horizontal_movement = current_position[0] - self.last_vsign_position[0]
+            normalized_movement = horizontal_movement  # 相对于实际坐标系统的移动（0-1范围）
+            
+            # 计算移动距离相对于屏幕宽度的比例
+            movement_ratio = abs(normalized_movement)
+            
+            # 计算当前位置与屏幕中心的距离
+            distance_to_center = abs(current_position[0] - self.center_position)
+            
+            # 判断是否在复位过程中（接近屏幕中心）
+            is_resetting = distance_to_center < self.reset_threshold
+            
+            # 检查是否超过触发阈值，且未处于方向锁定状态
+            current_time = time.time()
+            if (movement_ratio > self.vsign_trigger_threshold and 
+                current_time - self.last_trigger_time > self.cooldown and
+                not self.direction_locked and not self.swipe_complete):
+                
+                if horizontal_movement > 0:
+                    direction = "right"
+                else:
+                    direction = "left"
+                    
+                # 只有当方向确定且与上次不同或已重置时才触发
+                if self.vsign_direction is None or self.vsign_direction != direction:
+                    self.vsign_direction = direction
+                    triggered = True
+                    self.last_trigger_time = current_time
+                    # 锁定方向，防止复位过程中误触发
+                    self.direction_locked = True
+                    self.swipe_complete = True  # 标记滑动已完成
+                    # 输出终端信息（根据配置决定是否显示）
+                    if self.config.get('console_output', {}).get('show_vsign_events', True):
+                        print(f"锁定方向: {direction}，等待复位")
+                    # 重置起始位置，为下一次滑动做准备
+                    self.last_vsign_position = current_position
+            
+            # 如果已经完成滑动且接近中心位置，解锁方向锁定
+            if self.swipe_complete and is_resetting:
                 self.direction_locked = False
                 self.swipe_complete = False
+                self.vsign_direction = None
+                # 输出终端信息（根据配置决定是否显示）
+                if self.config.get('console_output', {}).get('show_reset_events', True):
+                    print("复位完成，解除方向锁定")
+                self.last_vsign_position = current_position
                 
         return triggered, direction
     
@@ -324,7 +312,7 @@ class GestureAnalyzer:
         """
         分析单帧图像中的手势
         
-        处理输入图像帧，检测手部姿势并分析手势状态。支持基本手势（张开/握拳）的
+        处理输入图像帧，检测手部姿势并分析手势状态。支持基本手势（张开/握拳/V-sign）的
         状态识别和V手势滑动检测。结合防抖机制提高识别稳定性。
         
         Args:
@@ -332,7 +320,7 @@ class GestureAnalyzer:
             
         Returns:
             Tuple[Optional[str], float, bool, Dict[str, Any]]: 
-                - 手势状态: 'open'表示张开，'fist'表示握拳，None表示不确定
+                - 手势状态: 'open'表示张开，'fist'表示握拳，'v-sign'表示V手势，None表示不确定
                 - 开合度: 0.0-1.0的浮点数，表示手掌开合程度
                 - 是否是状态转换: 布尔值，指示是否从张开变为握拳的瞬间
                 - 额外手势信息: 包含V手势、滑动方向等额外信息的字典
@@ -370,28 +358,29 @@ class GestureAnalyzer:
         # 计算开合度
         openness = self._calculate_openness(landmarks)
         
+        # 检测V-sign手势
+        is_vsign = self._is_vsign_gesture(landmarks)
+        extra_gestures["vsign_detected"] = is_vsign
+        
         # 判断基本状态
         thresholds = self.config['thresholds']
-        if openness <= thresholds['fist_max']:
+        if is_vsign:
+            new_state = 'v-sign'
+            # 如果是V-sign，获取跟踪点
+            tracking_point = self._get_vsign_tracking_point(landmarks)
+            extra_gestures["tracking_point"] = tracking_point
+            
+            # 检测V-sign的滑动
+            swiped, direction = self._detect_vsign_swipe(landmarks, frame_width)
+            if swiped:
+                extra_gestures["vsign_swiped"] = True
+                extra_gestures["swipe_direction"] = direction
+        elif openness <= thresholds['fist_max']:
             new_state = 'fist'
         elif openness >= thresholds['open_min']:
             new_state = 'open'
         else:
             new_state = None
-        
-        # 检测V-sign手势和滑动
-        is_vsign = self._is_vsign_gesture(landmarks)
-        extra_gestures["vsign_detected"] = is_vsign
-        
-        # 如果是V-sign手势，获取跟踪点并检测滑动
-        if is_vsign:
-            tracking_point = self._get_vsign_tracking_point(landmarks)
-            extra_gestures["tracking_point"] = tracking_point
-            
-            swiped, direction = self._detect_vsign_swipe(landmarks, frame_width)
-            if swiped:
-                extra_gestures["vsign_swiped"] = True
-                extra_gestures["swipe_direction"] = direction
         
         # 状态防抖
         if new_state == self.current_state:
@@ -410,7 +399,7 @@ class GestureAnalyzer:
                 prev_state = self.last_confirmed_state
                 self.last_confirmed_state = self.current_state
                 
-                # 只有当从open到fist状态转换时设置last_state
+                # 只有当从open到fist状态转换时设置last_state和触发标记
                 if prev_state == 'open' and self.current_state == 'fist':
                     self.last_state = prev_state
                     self.transition_detected = True
@@ -418,6 +407,8 @@ class GestureAnalyzer:
                     if self.config.get('console_output', {}).get('show_state_changes', True):
                         print(f"状态变化: {prev_state} -> {self.current_state} (触发)")
                 else:
+                    # 其他状态变化不触发，但记录last_state
+                    self.last_state = prev_state
                     # 输出终端信息（根据配置决定是否显示）
                     if self.config.get('console_output', {}).get('show_state_changes', True):
                         print(f"状态变化: {prev_state} -> {self.current_state} (不触发)")

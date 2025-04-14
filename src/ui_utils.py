@@ -174,7 +174,7 @@ class UIDrawer:
         
         Args:
             frame: 输入图像帧
-            state: 当前手势状态，可以是'open'、'fist'或None
+            state: 当前手势状态，可以是'open'、'fist'、'v-sign'或None
             openness: 手掌开合度，范围为0.0-1.0
             fps: 当前帧率
             analyzer_instance: 手势分析器实例，用于获取历史状态信息
@@ -187,8 +187,20 @@ class UIDrawer:
         
         # 绘制状态文本（左上角）
         if state and viz_config.get('show_state', True):
-            color = UIConfig.COLOR_GREEN if state == 'open' else UIConfig.COLOR_RED
-            state_text = f"状态: {'张开' if state == 'open' else '握拳'}"
+            # 根据状态选择颜色
+            if state == 'open':
+                color = UIConfig.COLOR_GREEN
+                state_text = "状态: 张开"
+            elif state == 'fist':
+                color = UIConfig.COLOR_RED
+                state_text = "状态: 握拳"
+            elif state == 'v-sign':
+                color = UIConfig.COLOR_PURPLE
+                state_text = "状态: V手势"
+            else:
+                color = UIConfig.COLOR_WHITE
+                state_text = f"状态: {state}"
+                
             frame = UIDrawer.put_chinese_text(
                 frame, 
                 state_text, 
@@ -246,8 +258,25 @@ class UIDrawer:
             last_state = analyzer_instance.last_state
             current_state = analyzer_instance.current_state
             if last_state and current_state:
-                last_state_text = '张开' if last_state == 'open' else '握拳'
-                current_state_text = '张开' if current_state == 'open' else '握拳'
+                # 转换状态文本
+                if last_state == 'open':
+                    last_state_text = '张开'
+                elif last_state == 'fist':
+                    last_state_text = '握拳'
+                elif last_state == 'v-sign':
+                    last_state_text = 'V手势'
+                else:
+                    last_state_text = last_state
+                    
+                if current_state == 'open':
+                    current_state_text = '张开'
+                elif current_state == 'fist':
+                    current_state_text = '握拳'
+                elif current_state == 'v-sign':
+                    current_state_text = 'V手势'
+                else:
+                    current_state_text = current_state
+                
                 state_text = f"上次: {last_state_text}, 当前: {current_state_text}"
                 frame = UIDrawer.put_chinese_text(
                     frame, 
@@ -403,15 +432,6 @@ class UIDrawer:
                                 UIConfig.COLOR_PURPLE, 
                                 UIConfig.VSIGN_FONT_SIZE
                             )
-                    
-                    # V手势类型提示
-                    frame = UIDrawer.put_chinese_text(
-                        frame, 
-                        "V手势", 
-                        (width - UIConfig.VSIGN_POSITION_X, UIConfig.VSIGN_POSITION_Y), 
-                        UIConfig.COLOR_PURPLE, 
-                        UIConfig.VSIGN_FONT_SIZE
-                    )
                     
                     # 方向锁定状态
                     lock_status = "已锁定" if direction_locked else "未锁定"
