@@ -4,18 +4,27 @@ from typing import Tuple, Optional, List, Dict, Any
 import yaml
 import cv2
 import time
-from PIL import Image, ImageDraw, ImageFont
 import os
 
+from src.ui_utils import UIDrawer
+
 class GestureAnalyzer:
-    """手势分析类，负责手势识别和状态判断"""
+    """
+    手势分析类，负责手势识别和状态判断
+    
+    此类使用MediaPipe库实现手部姿势的检测与跟踪，包括基本的手掌开合状态识别和
+    特殊手势（如V手势）的检测。支持手势动作触发和轨迹跟踪。
+    """
     
     def __init__(self, config_path: str):
         """
         初始化手势分析器
         
+        加载配置文件，初始化MediaPipe手部检测模型和相关状态变量，
+        设置手势识别参数和轨迹跟踪机制。
+        
         Args:
-            config_path: 配置文件路径
+            config_path: 配置文件路径，YAML格式
         """
         self.config = self._load_config(config_path)
         self.mp_hands = mp.solutions.hands
@@ -53,7 +62,17 @@ class GestureAnalyzer:
         self.reset_threshold = self.config.get('reset_threshold', 0.1)  # 复位阈值，接近中心位置的范围
         
     def _load_config(self, config_path: str) -> dict:
-        """加载配置文件"""
+        """
+        加载配置文件
+        
+        从指定路径加载YAML格式的配置文件，用于设置手势识别参数。
+        
+        Args:
+            config_path: 配置文件的路径
+            
+        Returns:
+            dict: 包含配置参数的字典
+        """
         with open(config_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
     
@@ -61,11 +80,14 @@ class GestureAnalyzer:
         """
         计算手掌开合度
         
+        基于手部关键点位置计算手掌的开合程度，通过分析四个手指（食指、中指、无名指、小指）
+        的指尖到指根距离与指根到手腕距离的比值，得出归一化的开合度值。
+        
         Args:
-            landmarks: 手部关键点列表
+            landmarks: 手部关键点列表，每个关键点为(x, y, z)坐标元组
             
         Returns:
-            float: 归一化的开合度值
+            float: 归一化的开合度值，范围0.0-1.0，0表示完全握拳，1表示完全张开
         """
         if not landmarks:
             return 0.0
@@ -113,13 +135,16 @@ class GestureAnalyzer:
     
     def _is_vsign_gesture(self, landmarks: List[Tuple[float, float, float]]) -> bool:
         """
-        检测是否是V-sign手势（食指与中指伸直并拢，其余手指收回）
+        检测是否是V-sign手势
+        
+        判断当前手势是否为V手势（食指与中指伸直并拢，其余手指收回）。
+        通过分析各手指的伸直程度和食指与中指的并拢程度来判断。
         
         Args:
-            landmarks: 手部关键点列表
+            landmarks: 手部关键点列表，每个关键点为(x, y, z)坐标元组
             
         Returns:
-            bool: 是否是V-sign手势
+            bool: 如果检测到V手势则返回True，否则返回False
         """
         if not landmarks:
             return False
@@ -169,13 +194,16 @@ class GestureAnalyzer:
     
     def _get_vsign_tracking_point(self, landmarks: List[Tuple[float, float, float]]) -> np.ndarray:
         """
-        获取V-sign手势的跟踪点（食指和中指指尖的中点）
+        获取V-sign手势的跟踪点
+        
+        计算V手势的代表性跟踪点，定义为食指和中指指尖的中点位置。
+        该点用于跟踪V手势的移动轨迹。
         
         Args:
-            landmarks: 手部关键点列表
+            landmarks: 手部关键点列表，每个关键点为(x, y, z)坐标元组
             
         Returns:
-            np.ndarray: 跟踪点坐标
+            np.ndarray: 跟踪点的三维坐标，格式为[x, y, z]
         """
         if not landmarks:
             return np.array([0, 0, 0])
@@ -193,12 +221,17 @@ class GestureAnalyzer:
         """
         检测V-sign手势的滑动
         
+        检测并分析V手势的水平滑动动作，用于触发方向控制。
+        支持左右方向识别、方向锁定和复位机制，防止误触发。
+        
         Args:
-            landmarks: 手部关键点列表
-            frame_width: 图像宽度
+            landmarks: 手部关键点列表，每个关键点为(x, y, z)坐标元组
+            frame_width: 图像宽度，用于归一化滑动距离
             
         Returns:
-            Tuple[bool, Optional[str]]: (是否触发滑动, 滑动方向)
+            Tuple[bool, Optional[str]]: 返回一个元组，第一个元素表示是否触发滑动，
+                                       第二个元素表示滑动方向('left'或'right')，
+                                       若未触发则方向为None
         """
         if not landmarks:
             return False, None
@@ -291,12 +324,18 @@ class GestureAnalyzer:
         """
         分析单帧图像中的手势
         
+        处理输入图像帧，检测手部姿势并分析手势状态。支持基本手势（张开/握拳）的
+        状态识别和V手势滑动检测。结合防抖机制提高识别稳定性。
+        
         Args:
-            frame: 输入图像帧
+            frame: 输入图像帧，OpenCV格式的numpy数组
             
         Returns:
             Tuple[Optional[str], float, bool, Dict[str, Any]]: 
-                (手势状态, 开合度, 是否是状态转换, 额外手势信息)
+                - 手势状态: 'open'表示张开，'fist'表示握拳，None表示不确定
+                - 开合度: 0.0-1.0的浮点数，表示手掌开合程度
+                - 是否是状态转换: 布尔值，指示是否从张开变为握拳的瞬间
+                - 额外手势信息: 包含V手势、滑动方向等额外信息的字典
         """
         frame_height, frame_width = frame.shape[:2]
         
@@ -388,192 +427,3 @@ class GestureAnalyzer:
             return self.current_state, openness, False, extra_gestures
             
         return None, openness, False, extra_gestures
-    
-    def _cv2_put_chinese_text(self, img, text, position, color, font_size=30):
-        """
-        在OpenCV图像上绘制中文文本
-        
-        Args:
-            img: OpenCV图像
-            text: 要绘制的文本
-            position: 文本位置，元组(x, y)
-            color: 文本颜色，元组(B, G, R)
-            font_size: 字体大小
-            
-        Returns:
-            img: 绘制了文本的图像
-        """
-        # 判断是否是中文
-        if any('\u4e00' <= ch <= '\u9fff' for ch in text):
-            # 转换图像格式
-            pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-            draw = ImageDraw.Draw(pil_img)
-            
-            # 尝试加载系统中的中文字体
-            fontpath = "C:/Windows/Fonts/simhei.ttf"  # 默认黑体
-            if not os.path.exists(fontpath):
-                # 尝试其他常见字体
-                font_options = [
-                    "C:/Windows/Fonts/simsun.ttc",    # 宋体
-                    "C:/Windows/Fonts/msyh.ttc",      # 微软雅黑
-                    "C:/Windows/Fonts/simkai.ttf"     # 楷体
-                ]
-                
-                for font_path in font_options:
-                    if os.path.exists(font_path):
-                        fontpath = font_path
-                        break
-            
-            # 加载字体
-            try:
-                font = ImageFont.truetype(fontpath, font_size)
-            except IOError:
-                # 如果无法加载字体，使用默认字体
-                font = ImageFont.load_default()
-            
-            # 绘制文本
-            draw.text(position, text, font=font, fill=(color[2], color[1], color[0]))
-            
-            # 转换回OpenCV格式
-            img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-            return img
-        else:
-            # 如果不是中文，使用OpenCV原生方法
-            return cv2.putText(img, text, position, cv2.FONT_HERSHEY_SIMPLEX, font_size/60, color, 2)
-    
-    def draw_landmarks(self, frame: np.ndarray, extra_info: Dict[str, Any] = None) -> np.ndarray:
-        """
-        在图像上绘制手部关键点和额外信息
-        
-        Args:
-            frame: 输入图像帧
-            extra_info: 额外信息字典
-            
-        Returns:
-            np.ndarray: 绘制了关键点的图像帧
-        """
-        if self.last_results and self.last_results.multi_hand_landmarks:
-            height, width = frame.shape[:2]
-            
-            # 获取可视化配置
-            viz_config = self.config.get('visualization', {})
-            
-            # UI元素位置和样式参数（可在此处调整）
-            vsign_font_size = 30                  # V手势信息字体大小
-            vsign_position = [150, 60]            # V手势信息位置 [x偏移量（从右边开始算）, y]
-            direction_position = [10, 60]         # 方向信息位置 [x, y]
-            lock_position = [10, 90]              # 锁定状态位置 [x, y]
-            reset_position = [10, 120]            # 复位状态位置 [x, y]
-            
-            # 绘制手部关键点和连接线
-            if viz_config.get('show_landmarks', True):
-                for hand_landmarks in self.last_results.multi_hand_landmarks:
-                    self.mp_draw.draw_landmarks(
-                        frame, 
-                        hand_landmarks, 
-                        self.mp_hands.HAND_CONNECTIONS,
-                        self.mp_draw.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=4),
-                        self.mp_draw.DrawingSpec(color=(0, 0, 255), thickness=2)
-                    )
-                    
-                    # 获取关键点列表
-                    landmarks = hand_landmarks.landmark
-                    
-                    # 获取食指和中指指尖位置
-                    index_tip = (int(landmarks[8].x * width), int(landmarks[8].y * height))
-                    middle_tip = (int(landmarks[12].x * width), int(landmarks[12].y * height))
-                    
-                    # 计算指尖中点位置（跟踪点）
-                    tracking_point = (
-                        (index_tip[0] + middle_tip[0]) // 2,
-                        (index_tip[1] + middle_tip[1]) // 2
-                    )
-                    
-                    # 绘制指尖标记
-                    cv2.circle(frame, index_tip, 8, (0, 255, 255), -1)
-                    cv2.circle(frame, middle_tip, 8, (0, 255, 255), -1)
-                    
-                    # 绘制跟踪点（较大圆圈）
-                    cv2.circle(frame, tracking_point, 12, (255, 0, 255), -1)
-                    
-                    # 如果有V手势滑动，显示相关信息
-                    if viz_config.get('show_vsign_info', True):
-                        # 滑动方向信息
-                        if extra_info.get("vsign_swiped", False):
-                            direction = extra_info.get("swipe_direction")
-                            if direction:
-                                direction_text = f"滑动: {'右' if direction == 'right' else '左'}"
-                                frame = self._cv2_put_chinese_text(
-                                    frame, 
-                                    direction_text, 
-                                    (direction_position[0], direction_position[1]), 
-                                    (255, 0, 255), 
-                                    vsign_font_size
-                                )
-                        
-                        # V手势类型提示
-                        frame = self._cv2_put_chinese_text(
-                            frame, 
-                            "V手势", 
-                            (width - vsign_position[0], vsign_position[1]), 
-                            (255, 0, 255), 
-                            vsign_font_size
-                        )
-                        
-                        # 方向锁定状态
-                        lock_status = "已锁定" if self.direction_locked else "未锁定"
-                        lock_color = (0, 0, 255) if self.direction_locked else (0, 255, 0)
-                        frame = self._cv2_put_chinese_text(
-                            frame, 
-                            f"方向: {lock_status}", 
-                            (lock_position[0], lock_position[1]), 
-                            lock_color, 
-                            25
-                        )
-                        
-                        # 显示复位状态
-                        reset_text = ""
-                        if self.direction_locked and self.swipe_complete:
-                            # 计算当前位置与屏幕中心的距离
-                            if extra_info and extra_info.get("tracking_point") is not None:
-                                current_pos = extra_info["tracking_point"]
-                                current_x = current_pos[0]  # 归一化的x坐标 (0-1)
-                                distance_to_center = abs(current_x - self.center_position)
-                                is_resetting = distance_to_center < self.reset_threshold
-                                
-                                if is_resetting:
-                                    reset_text = "即将完成复位"
-                                else:
-                                    reset_text = "请将手移回中心位置"
-                        
-                        if reset_text:
-                            frame = self._cv2_put_chinese_text(
-                                frame, 
-                                reset_text, 
-                                (reset_position[0], reset_position[1]), 
-                                (0, 255, 255), 
-                                25
-                            )
-            
-            # 绘制中心位置标记线
-            if viz_config.get('show_center_line', True):
-                center_x = int(self.center_position * width)
-                cv2.line(frame, (center_x, 0), (center_x, height), (0, 255, 0), 1)
-            
-            # 绘制复位区域
-            if viz_config.get('show_reset_area', True):
-                reset_left = int((self.center_position - self.reset_threshold) * width)
-                reset_right = int((self.center_position + self.reset_threshold) * width)
-                cv2.rectangle(frame, (reset_left, 0), (reset_right, 30), (0, 255, 255), -1)
-                frame = self._cv2_put_chinese_text(frame, "复位区域", (reset_left + 10, 20), (0, 0, 0), 20)
-                
-            # 绘制轨迹
-            if viz_config.get('show_tracking_path', True) and len(self.position_history) >= 2:
-                for i in range(1, len(self.position_history)):
-                    pt1 = (int(self.position_history[i-1][0] * frame.shape[1]), 
-                          int(self.position_history[i-1][1] * frame.shape[0]))
-                    pt2 = (int(self.position_history[i][0] * frame.shape[1]), 
-                          int(self.position_history[i][1] * frame.shape[0]))
-                    cv2.line(frame, pt1, pt2, (0, 255, 0), 2)
-                
-        return frame

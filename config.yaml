@@ -8,10 +8,11 @@ center_position: 0.5    # 屏幕中心位置（归一化坐标，范围0-1）
 reset_threshold: 0.1    # 复位阈值，接近中心位置的范围
 
 camera:
-  id: 0
+  camera_index: 0
   width: 640
   height: 480
   fps: 30
+  flip_horizontal: true
 
 # 可视化界面配置
 visualization:
