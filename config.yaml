@@ -4,6 +4,8 @@ thresholds:
 cooldown: 1.0      # 冷却时间（秒）
 use_system_cmd: false  # 使用系统命令触发按键
 vsign_trigger_threshold: 0.1  # V-sign手势滑动触发阈值（屏幕宽度的10%）
+center_position: 0.5    # 屏幕中心位置（归一化坐标，范围0-1）
+reset_threshold: 0.1    # 复位阈值，接近中心位置的范围
 
 camera:
   id: 0
@@ -11,8 +13,28 @@ camera:
   height: 480
   fps: 30
 
+# 可视化界面配置
 visualization:
-  show_landmarks: true
-  show_state: true
-  show_progress: true
-  window_name: "Gesture Control" 
+  window_name: "Gesture Control"  # 窗口名称
+  
+  # UI元素显示开关
+  show_landmarks: true            # 是否显示手部关键点
+  show_state: true                # 是否显示手势状态
+  show_openness_bar: true         # 是否显示开合度进度条
+  show_fps: true                  # 是否显示FPS
+  show_gesture_history: true      # 是否显示历史状态
+  show_instructions: true         # 是否显示手势说明
+  show_tracking_path: true        # 是否显示手指轨迹
+  show_vsign_info: true           # 是否显示V手势信息
+  show_center_line: true          # 是否显示中心线
+  show_reset_area: true           # 是否显示复位区域
+  show_trigger_info: true         # 是否显示触发提示
+
+# 终端输出配置
+console_output:
+  show_startup_info: true         # 是否显示启动信息
+  show_state_changes: true        # 是否显示状态变化信息
+  show_vsign_events: true         # 是否显示V手势事件信息
+  show_reset_events: true         # 是否显示复位事件信息
+  show_trigger_events: true       # 是否显示触发事件信息
+  show_error_messages: true       # 是否显示错误信息 

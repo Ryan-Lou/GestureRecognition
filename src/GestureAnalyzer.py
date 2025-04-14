@@ -4,6 +4,8 @@ from typing import Tuple, Optional, List, Dict, Any
 import yaml
 import cv2
 import time
+from PIL import Image, ImageDraw, ImageFont
+import os
 
 class GestureAnalyzer:
     """手势分析类，负责手势识别和状态判断"""
@@ -43,6 +45,12 @@ class GestureAnalyzer:
         # 手势轨迹跟踪
         self.position_history = []
         self.max_history_length = 10  # 保存最近10帧的位置
+        
+        # 添加方向锁定和复位相关变量
+        self.direction_locked = False  # 方向锁定标记
+        self.swipe_complete = False    # 滑动完成标记
+        self.center_position = self.config.get('center_position', 0.5)  # 屏幕中心位置（归一化坐标，范围0-1）
+        self.reset_threshold = self.config.get('reset_threshold', 0.1)  # 复位阈值，接近中心位置的范围
         
     def _load_config(self, config_path: str) -> dict:
         """加载配置文件"""
@@ -183,11 +191,11 @@ class GestureAnalyzer:
     
     def _detect_vsign_swipe(self, landmarks: List[Tuple[float, float, float]], frame_width: int) -> Tuple[bool, Optional[str]]:
         """
-        检测V-sign手势的左右滑动
+        检测V-sign手势的滑动
         
         Args:
             landmarks: 手部关键点列表
-            frame_width: 帧宽度，用于计算相对移动距离
+            frame_width: 图像宽度
             
         Returns:
             Tuple[bool, Optional[str]]: (是否触发滑动, 滑动方向)
@@ -219,6 +227,8 @@ class GestureAnalyzer:
                 self.last_vsign_position = current_position
                 self.vsign_start_time = time.time()
                 self.vsign_direction = None
+                self.direction_locked = False  # 重置方向锁定
+                self.swipe_complete = False    # 重置滑动完成标记
             else:
                 # 计算水平移动距离
                 horizontal_movement = current_position[0] - self.last_vsign_position[0]
@@ -227,10 +237,17 @@ class GestureAnalyzer:
                 # 计算移动距离相对于屏幕宽度的比例
                 movement_ratio = abs(normalized_movement)
                 
-                # 检查是否超过触发阈值
+                # 计算当前位置与屏幕中心的距离
+                distance_to_center = abs(current_position[0] - self.center_position)
+                
+                # 判断是否在复位过程中（接近屏幕中心）
+                is_resetting = distance_to_center < self.reset_threshold
+                
+                # 检查是否超过触发阈值，且未处于方向锁定状态
                 current_time = time.time()
                 if (movement_ratio > self.vsign_trigger_threshold and 
-                    current_time - self.last_trigger_time > self.cooldown):
+                    current_time - self.last_trigger_time > self.cooldown and
+                    not self.direction_locked and not self.swipe_complete):
                     
                     if horizontal_movement > 0:
                         direction = "right"
@@ -242,13 +259,31 @@ class GestureAnalyzer:
                         self.vsign_direction = direction
                         triggered = True
                         self.last_trigger_time = current_time
+                        # 锁定方向，防止复位过程中误触发
+                        self.direction_locked = True
+                        self.swipe_complete = True  # 标记滑动已完成
+                        # 输出终端信息（根据配置决定是否显示）
+                        if self.config.get('console_output', {}).get('show_vsign_events', True):
+                            print(f"锁定方向: {direction}，等待复位")
                         # 重置起始位置，为下一次滑动做准备
                         self.last_vsign_position = current_position
+                
+                # 如果已经完成滑动且接近中心位置，解锁方向锁定
+                if self.swipe_complete and is_resetting:
+                    self.direction_locked = False
+                    self.swipe_complete = False
+                    self.vsign_direction = None
+                    # 输出终端信息（根据配置决定是否显示）
+                    if self.config.get('console_output', {}).get('show_reset_events', True):
+                        print("复位完成，解除方向锁定")
+                    self.last_vsign_position = current_position
         else:
-            # 如果不再是V-sign手势，重置状态
+            # 如果不再是V-sign手势，重置所有状态
             if self.vsign_detected:
                 self.vsign_detected = False
                 self.vsign_direction = None
+                self.direction_locked = False
+                self.swipe_complete = False
                 
         return triggered, direction
     
@@ -279,7 +314,9 @@ class GestureAnalyzer:
             "vsign_detected": False,
             "vsign_swiped": False,
             "swipe_direction": None,
-            "tracking_point": None
+            "tracking_point": None,
+            "direction_locked": self.direction_locked,
+            "swipe_complete": self.swipe_complete
         }
         
         if not self.last_results.multi_hand_landmarks:
@@ -338,9 +375,13 @@ class GestureAnalyzer:
                 if prev_state == 'open' and self.current_state == 'fist':
                     self.last_state = prev_state
                     self.transition_detected = True
-                    print(f"状态变化: {prev_state} -> {self.current_state} (触发)")
+                    # 输出终端信息（根据配置决定是否显示）
+                    if self.config.get('console_output', {}).get('show_state_changes', True):
+                        print(f"状态变化: {prev_state} -> {self.current_state} (触发)")
                 else:
-                    print(f"状态变化: {prev_state} -> {self.current_state} (不触发)")
+                    # 输出终端信息（根据配置决定是否显示）
+                    if self.config.get('console_output', {}).get('show_state_changes', True):
+                        print(f"状态变化: {prev_state} -> {self.current_state} (不触发)")
                 
                 return self.current_state, openness, self.transition_detected, extra_gestures
                 
@@ -348,62 +389,186 @@ class GestureAnalyzer:
             
         return None, openness, False, extra_gestures
     
+    def _cv2_put_chinese_text(self, img, text, position, color, font_size=30):
+        """
+        在OpenCV图像上绘制中文文本
+        
+        Args:
+            img: OpenCV图像
+            text: 要绘制的文本
+            position: 文本位置，元组(x, y)
+            color: 文本颜色，元组(B, G, R)
+            font_size: 字体大小
+            
+        Returns:
+            img: 绘制了文本的图像
+        """
+        # 判断是否是中文
+        if any('\u4e00' <= ch <= '\u9fff' for ch in text):
+            # 转换图像格式
+            pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            draw = ImageDraw.Draw(pil_img)
+            
+            # 尝试加载系统中的中文字体
+            fontpath = "C:/Windows/Fonts/simhei.ttf"  # 默认黑体
+            if not os.path.exists(fontpath):
+                # 尝试其他常见字体
+                font_options = [
+                    "C:/Windows/Fonts/simsun.ttc",    # 宋体
+                    "C:/Windows/Fonts/msyh.ttc",      # 微软雅黑
+                    "C:/Windows/Fonts/simkai.ttf"     # 楷体
+                ]
+                
+                for font_path in font_options:
+                    if os.path.exists(font_path):
+                        fontpath = font_path
+                        break
+            
+            # 加载字体
+            try:
+                font = ImageFont.truetype(fontpath, font_size)
+            except IOError:
+                # 如果无法加载字体，使用默认字体
+                font = ImageFont.load_default()
+            
+            # 绘制文本
+            draw.text(position, text, font=font, fill=(color[2], color[1], color[0]))
+            
+            # 转换回OpenCV格式
+            img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+            return img
+        else:
+            # 如果不是中文，使用OpenCV原生方法
+            return cv2.putText(img, text, position, cv2.FONT_HERSHEY_SIMPLEX, font_size/60, color, 2)
+    
     def draw_landmarks(self, frame: np.ndarray, extra_info: Dict[str, Any] = None) -> np.ndarray:
         """
         在图像上绘制手部关键点和额外信息
         
         Args:
             frame: 输入图像帧
-            extra_info: 额外信息，如手势类型、滑动方向等
+            extra_info: 额外信息字典
             
         Returns:
             np.ndarray: 绘制了关键点的图像帧
         """
-        # 绘制手部关键点
         if self.last_results and self.last_results.multi_hand_landmarks:
-            for hand_landmarks in self.last_results.multi_hand_landmarks:
-                self.mp_draw.draw_landmarks(
-                    frame,
-                    hand_landmarks,
-                    self.mp_hands.HAND_CONNECTIONS
-                )
-                
-            # 如果检测到V-sign手势，标记出来
-            if extra_info and extra_info.get("vsign_detected", False):
-                height, width = frame.shape[:2]
-                landmarks = hand_landmarks.landmark
-                
-                # 获取食指和中指指尖位置
-                index_tip = (int(landmarks[8].x * width), int(landmarks[8].y * height))
-                middle_tip = (int(landmarks[12].x * width), int(landmarks[12].y * height))
-                
-                # 计算指尖中点位置（跟踪点）
-                tracking_point = (
-                    (index_tip[0] + middle_tip[0]) // 2,
-                    (index_tip[1] + middle_tip[1]) // 2
-                )
-                
-                # 绘制指尖标记
-                cv2.circle(frame, index_tip, 8, (0, 255, 255), -1)
-                cv2.circle(frame, middle_tip, 8, (0, 255, 255), -1)
-                
-                # 绘制跟踪点（较大圆圈）
-                cv2.circle(frame, tracking_point, 12, (255, 0, 255), -1)
-                
-                # 如果有滑动，显示方向
-                if extra_info.get("vsign_swiped", False):
-                    direction = extra_info.get("swipe_direction")
-                    if direction:
-                        direction_text = f"Swipe: {direction}"
-                        cv2.putText(frame, direction_text, (10, 60),
-                                  cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 2)
-                
-                # 显示手势类型
-                cv2.putText(frame, "V-Sign", (width - 150, 60),
-                          cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 255), 2)
+            height, width = frame.shape[:2]
+            
+            # 获取可视化配置
+            viz_config = self.config.get('visualization', {})
+            
+            # UI元素位置和样式参数（可在此处调整）
+            vsign_font_size = 30                  # V手势信息字体大小
+            vsign_position = [150, 60]            # V手势信息位置 [x偏移量（从右边开始算）, y]
+            direction_position = [10, 60]         # 方向信息位置 [x, y]
+            lock_position = [10, 90]              # 锁定状态位置 [x, y]
+            reset_position = [10, 120]            # 复位状态位置 [x, y]
+            
+            # 绘制手部关键点和连接线
+            if viz_config.get('show_landmarks', True):
+                for hand_landmarks in self.last_results.multi_hand_landmarks:
+                    self.mp_draw.draw_landmarks(
+                        frame, 
+                        hand_landmarks, 
+                        self.mp_hands.HAND_CONNECTIONS,
+                        self.mp_draw.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=4),
+                        self.mp_draw.DrawingSpec(color=(0, 0, 255), thickness=2)
+                    )
+                    
+                    # 获取关键点列表
+                    landmarks = hand_landmarks.landmark
+                    
+                    # 获取食指和中指指尖位置
+                    index_tip = (int(landmarks[8].x * width), int(landmarks[8].y * height))
+                    middle_tip = (int(landmarks[12].x * width), int(landmarks[12].y * height))
+                    
+                    # 计算指尖中点位置（跟踪点）
+                    tracking_point = (
+                        (index_tip[0] + middle_tip[0]) // 2,
+                        (index_tip[1] + middle_tip[1]) // 2
+                    )
+                    
+                    # 绘制指尖标记
+                    cv2.circle(frame, index_tip, 8, (0, 255, 255), -1)
+                    cv2.circle(frame, middle_tip, 8, (0, 255, 255), -1)
+                    
+                    # 绘制跟踪点（较大圆圈）
+                    cv2.circle(frame, tracking_point, 12, (255, 0, 255), -1)
+                    
+                    # 如果有V手势滑动，显示相关信息
+                    if viz_config.get('show_vsign_info', True):
+                        # 滑动方向信息
+                        if extra_info.get("vsign_swiped", False):
+                            direction = extra_info.get("swipe_direction")
+                            if direction:
+                                direction_text = f"滑动: {'右' if direction == 'right' else '左'}"
+                                frame = self._cv2_put_chinese_text(
+                                    frame, 
+                                    direction_text, 
+                                    (direction_position[0], direction_position[1]), 
+                                    (255, 0, 255), 
+                                    vsign_font_size
+                                )
+                        
+                        # V手势类型提示
+                        frame = self._cv2_put_chinese_text(
+                            frame, 
+                            "V手势", 
+                            (width - vsign_position[0], vsign_position[1]), 
+                            (255, 0, 255), 
+                            vsign_font_size
+                        )
+                        
+                        # 方向锁定状态
+                        lock_status = "已锁定" if self.direction_locked else "未锁定"
+                        lock_color = (0, 0, 255) if self.direction_locked else (0, 255, 0)
+                        frame = self._cv2_put_chinese_text(
+                            frame, 
+                            f"方向: {lock_status}", 
+                            (lock_position[0], lock_position[1]), 
+                            lock_color, 
+                            25
+                        )
+                        
+                        # 显示复位状态
+                        reset_text = ""
+                        if self.direction_locked and self.swipe_complete:
+                            # 计算当前位置与屏幕中心的距离
+                            if extra_info and extra_info.get("tracking_point") is not None:
+                                current_pos = extra_info["tracking_point"]
+                                current_x = current_pos[0]  # 归一化的x坐标 (0-1)
+                                distance_to_center = abs(current_x - self.center_position)
+                                is_resetting = distance_to_center < self.reset_threshold
+                                
+                                if is_resetting:
+                                    reset_text = "即将完成复位"
+                                else:
+                                    reset_text = "请将手移回中心位置"
+                        
+                        if reset_text:
+                            frame = self._cv2_put_chinese_text(
+                                frame, 
+                                reset_text, 
+                                (reset_position[0], reset_position[1]), 
+                                (0, 255, 255), 
+                                25
+                            )
+            
+            # 绘制中心位置标记线
+            if viz_config.get('show_center_line', True):
+                center_x = int(self.center_position * width)
+                cv2.line(frame, (center_x, 0), (center_x, height), (0, 255, 0), 1)
+            
+            # 绘制复位区域
+            if viz_config.get('show_reset_area', True):
+                reset_left = int((self.center_position - self.reset_threshold) * width)
+                reset_right = int((self.center_position + self.reset_threshold) * width)
+                cv2.rectangle(frame, (reset_left, 0), (reset_right, 30), (0, 255, 255), -1)
+                frame = self._cv2_put_chinese_text(frame, "复位区域", (reset_left + 10, 20), (0, 0, 0), 20)
                 
             # 绘制轨迹
-            if len(self.position_history) >= 2:
+            if viz_config.get('show_tracking_path', True) and len(self.position_history) >= 2:
                 for i in range(1, len(self.position_history)):
                     pt1 = (int(self.position_history[i-1][0] * frame.shape[1]), 
                           int(self.position_history[i-1][1] * frame.shape[0]))

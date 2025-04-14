@@ -50,7 +50,10 @@ class ActionTrigger:
             self.last_trigger_time = current_time
             return True
         except Exception as e:
-            print(f"触发空格键出错: {e}")
+            # 获取终端输出配置
+            console_config = self.config.get('console_output', {})
+            if console_config.get('show_error_messages', True):
+                print(f"触发空格键出错: {e}")
             return False
             
     def trigger_direction_key(self, direction: str) -> bool:
@@ -85,8 +88,16 @@ class ActionTrigger:
                 
             # 更新最后触发时间
             self.last_trigger_time = current_time
-            print(f"触发{direction}方向键!")
+            
+            # 获取终端输出配置
+            console_config = self.config.get('console_output', {})
+            if console_config.get('show_trigger_events', True):
+                print(f"触发{direction}方向键!")
+                
             return True
         except Exception as e:
-            print(f"触发方向键出错: {e}")
+            # 获取终端输出配置
+            console_config = self.config.get('console_output', {})
+            if console_config.get('show_error_messages', True):
+                print(f"触发方向键出错: {e}")
             return False 
