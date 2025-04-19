@@ -5,15 +5,21 @@ import yaml
 import cv2
 import time
 import os
+import math
+from pathlib import Path
 
 from src.ui_utils import UIDrawer
+
+# 引入MediaPipe的手势识别器
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 
 class GestureAnalyzer:
     """
     手势分析类，负责手势识别和状态判断
     
     此类使用MediaPipe库实现手部姿势的检测与跟踪，包括基本的手掌开合状态识别和
-    特殊手势（如V手势）的检测。支持手势动作触发和轨迹跟踪。
+    特殊手势（如V手势、拇指向上/向下手势）的检测。支持手势动作触发和轨迹跟踪。
     """
     
     def __init__(self, config_path: str):
@@ -61,6 +67,47 @@ class GestureAnalyzer:
         self.center_position = self.config.get('center_position', 0.5)  # 屏幕中心位置（归一化坐标，范围0-1）
         self.reset_threshold = self.config.get('reset_threshold', 0.1)  # 复位阈值，接近中心位置的范围
         
+        # 初始化拇指手势相关变量
+        self.is_thumb_up = False
+        self.is_thumb_down = False
+        self.thumb_cooldown = 0
+        self.thumb_cooldown_frames = self.config.get('thumb_gesture_cooldown', 15)  # 拇指手势冷却帧数
+        
+        # 拇指手势识别参数
+        self.thumb_config = self.config.get('thumb_gesture', {})
+        self.thumb_straightness_threshold = self.thumb_config.get('straightness_threshold', 0.7)
+        self.thumb_bent_fingers_count = self.thumb_config.get('bent_fingers_count', 3)
+        self.thumb_y_distance_threshold = self.thumb_config.get('y_distance_threshold', 0.05)
+        self.fist_distinction_factor = self.thumb_config.get('fist_distinction_factor', 0.3)
+        
+        # 初始化MediaPipe手势识别器（如果配置中启用）
+        self.use_mediapipe_gesture = self.config.get('use_mediapipe_gesture', True)
+        self.gesture_recognizer = None
+        self.temp_model_path = None
+        
+        try:
+            if not self.use_mediapipe_gesture:
+                return
+                
+            # 关闭MediaPipe手势识别，使用我们自己的识别逻辑
+            if self.config.get('console_output', {}).get('show_startup_info', True):
+                print("由于兼容性问题，关闭MediaPipe手势识别，使用内置识别逻辑")
+            self.use_mediapipe_gesture = False
+            
+        except Exception as e:
+            if self.config.get('console_output', {}).get('show_error_messages', True):
+                print(f"初始化MediaPipe手势识别器时出现错误: {e}")
+            self.use_mediapipe_gesture = False
+        
+        # 设置手势识别结果映射（将MediaPipe手势名称映射到我们的状态名称）
+        self.gesture_mapping = {
+            "Thumb_Up": "thumb-up",
+            "Thumb_Down": "thumb-down",
+            "Victory": "v-sign",
+            "Closed_Fist": "fist",
+            "Open_Palm": "open"
+        }
+    
     def _load_config(self, config_path: str) -> dict:
         """
         加载配置文件
@@ -126,8 +173,8 @@ class GestureAnalyzer:
         avg_openness = np.mean(finger_openness)
         
         # 归一化处理（根据实际测试调整范围）
-        min_openness = 0.3  # 最小开合度（握拳状态）
-        max_openness = 1.2  # 最大开合度（完全张开状态）
+        min_openness = 0.2  # 最小开合度（握拳状态）
+        max_openness = 1.1  # 最大开合度（完全张开状态）
         
         # 将开合度映射到0-1范围
         normalized_openness = (avg_openness - min_openness) / (max_openness - min_openness)
@@ -308,6 +355,274 @@ class GestureAnalyzer:
                 
         return triggered, direction
     
+    def _is_thumb_gesture(self, landmarks) -> Tuple[bool, bool]:
+        """
+        检测拇指向上或向下手势（增强版）
+        
+        通过分析拇指与其他手指的相对位置以及拇指的朝向来识别拇指向上/向下手势。
+        使用多种特征进行判断，增强与握拳状态的区分度。
+        
+        Args:
+            landmarks: 手部关键点列表
+            
+        Returns:
+            Tuple[bool, bool]: (是否拇指向上, 是否拇指向下)
+        """
+        if not landmarks:
+            return False, False
+            
+        try:
+            # 获取调试标志
+            show_debug = self.config.get('console_output', {}).get('show_thumb_debug', False)
+            
+            # 获取拇指指尖、第一关节和食指第一关节的坐标
+            # 注意：landmarks可能是MediaPipe原始landmark对象列表，也可能是元组列表
+            if hasattr(landmarks[0], 'x'):
+                # MediaPipe原始landmark对象
+                thumb_tip = landmarks[4]  # 拇指尖
+                thumb_ip = landmarks[3]   # 拇指第一关节
+                thumb_mcp = landmarks[2]  # 拇指掌指关节
+                index_tip = landmarks[8]  # 食指尖
+                index_pip = landmarks[6]  # 食指第二关节
+                index_mcp = landmarks[5]  # 食指掌指关节
+                middle_tip = landmarks[12] # 中指尖
+                ring_tip = landmarks[16]   # 无名指尖
+                pinky_tip = landmarks[20]  # 小指尖
+                wrist = landmarks[0]      # 手腕
+                
+                # 特征1: 拇指伸直度 - 拇指尖到第一关节的距离与第一关节到掌指关节的距离比较
+                thumb_straightness = math.sqrt((thumb_tip.x - thumb_ip.x)**2 + 
+                                              (thumb_tip.y - thumb_ip.y)**2 + 
+                                              (thumb_tip.z - thumb_ip.z)**2)
+                thumb_base_length = math.sqrt((thumb_mcp.x - thumb_ip.x)**2 + 
+                                             (thumb_mcp.y - thumb_ip.y)**2 + 
+                                             (thumb_mcp.z - thumb_ip.z)**2)
+                
+                # 特征2: 其他手指弯曲程度 - 检查各指尖与掌指关节的y坐标差异
+                finger_tips = [index_tip, middle_tip, ring_tip, pinky_tip]
+                finger_mcps = [index_mcp, landmarks[9], landmarks[13], landmarks[17]]  # 各手指掌指关节
+                
+                # 计算各手指弯曲程度
+                bent_fingers = 0
+                finger_bend_ratio = 0  # 用于记录弯曲程度
+                finger_bend_details = []  # 记录各手指弯曲详情，用于调试
+                
+                for i, (tip, mcp) in enumerate(zip(finger_tips, finger_mcps)):
+                    # 计算指尖与掌指关节的y坐标差值（正值表示弯曲）
+                    bend_amount = tip.y - mcp.y
+                    finger_name = ["食指", "中指", "无名指", "小指"][i]
+                    finger_bend_details.append(f"{finger_name}: {bend_amount:.3f}")
+                    
+                    # 弯曲判断
+                    if bend_amount > 0:
+                        bent_fingers += 1
+                        finger_bend_ratio += bend_amount
+                
+                # 特征3: 拇指与其他手指的分离度 - 拇指尖与其他指尖间的距离
+                dist_to_index = math.sqrt((thumb_tip.x - index_tip.x)**2 + 
+                                          (thumb_tip.y - index_tip.y)**2 + 
+                                          (thumb_tip.z - index_tip.z)**2)
+                
+                # 计算拇指伸直程度和弯曲手指平均比率
+                is_thumb_straight = thumb_straightness > thumb_base_length * self.thumb_straightness_threshold
+                
+                if bent_fingers > 0:
+                    finger_bend_ratio /= bent_fingers  # 平均弯曲度
+                    
+                # 特征4: 拇指方向 - 拇指尖与掌指关节的y坐标差值
+                y_distance = thumb_tip.y - thumb_mcp.y
+                
+                # 特征5: 拇指朝向 - 使用拇指尖和第一关节的方向向量
+                thumb_direction_y = thumb_tip.y - thumb_ip.y  # 负值表示向上，正值表示向下
+                
+                # 判断是否是握拳状态 - 要求至少指定数量的手指弯曲
+                is_fist = bent_fingers >= self.thumb_bent_fingers_count
+                
+                # 增强特征: 拇指必须明显地与其他手指分开
+                is_thumb_separated = dist_to_index > 0.1  # 拇指与食指的距离必须足够大
+                
+                # 计算区分度
+                distinction_ratio = abs(y_distance) / (finger_bend_ratio + 0.001)  # 避免除以零
+                
+                # 初始化结果
+                is_thumb_up = False
+                is_thumb_down = False
+                
+                # 增强判断条件 - 同时考虑多个特征
+                if is_thumb_straight and is_fist and is_thumb_separated:
+                    if y_distance < -self.thumb_y_distance_threshold and thumb_direction_y < 0:  # 拇指向上
+                        if distinction_ratio > self.fist_distinction_factor:
+                            is_thumb_up = True
+                    elif y_distance > self.thumb_y_distance_threshold and thumb_direction_y > 0:  # 拇指向下
+                        if distinction_ratio > self.fist_distinction_factor:
+                            is_thumb_down = True
+                
+                # 详细调试输出
+                if show_debug:
+                    print(f"拇指手势分析:")
+                    print(f"  拇指伸直度: {is_thumb_straight} ({thumb_straightness:.3f} > {thumb_base_length * self.thumb_straightness_threshold:.3f})")
+                    print(f"  弯曲手指数: {bent_fingers}/{len(finger_tips)}")
+                    print(f"  手指弯曲详情: {', '.join(finger_bend_details)}")
+                    print(f"  拇指Y距离: {y_distance:.3f} (阈值: {self.thumb_y_distance_threshold})")
+                    print(f"  拇指方向Y: {thumb_direction_y:.3f}")
+                    print(f"  拇指分离度: {is_thumb_separated} ({dist_to_index:.3f})")
+                    print(f"  区分比率: {distinction_ratio:.3f} (阈值: {self.fist_distinction_factor})")
+                    print(f"  判断结果: {'拇指向上' if is_thumb_up else '拇指向下' if is_thumb_down else '非拇指手势'}")
+                
+            else:
+                # landmarks是元组列表，格式为[(x, y, z), ...]
+                thumb_tip = np.array(landmarks[4])
+                thumb_ip = np.array(landmarks[3])
+                thumb_mcp = np.array(landmarks[2])
+                index_tip = np.array(landmarks[8])
+                index_mcp = np.array(landmarks[5])
+                middle_tip = np.array(landmarks[12])
+                ring_tip = np.array(landmarks[16])
+                pinky_tip = np.array(landmarks[20])
+                wrist = np.array(landmarks[0])
+                
+                # 特征1: 拇指伸直度
+                thumb_straightness = np.linalg.norm(thumb_tip - thumb_ip)
+                thumb_base_length = np.linalg.norm(thumb_mcp - thumb_ip)
+                
+                # 特征2: 其他手指弯曲程度
+                finger_tips = [index_tip, middle_tip, ring_tip, pinky_tip]
+                finger_mcps = [index_mcp, np.array(landmarks[9]), np.array(landmarks[13]), np.array(landmarks[17])]
+                
+                # 计算各手指弯曲程度
+                bent_fingers = 0
+                finger_bend_ratio = 0
+                finger_bend_details = []
+                
+                for i, (tip, mcp) in enumerate(zip(finger_tips, finger_mcps)):
+                    bend_amount = tip[1] - mcp[1]  # y坐标差值
+                    finger_name = ["食指", "中指", "无名指", "小指"][i]
+                    finger_bend_details.append(f"{finger_name}: {bend_amount:.3f}")
+                    
+                    if bend_amount > 0:
+                        bent_fingers += 1
+                        finger_bend_ratio += bend_amount
+                
+                # 特征3: 拇指与其他手指的分离度
+                dist_to_index = np.linalg.norm(thumb_tip - index_tip)
+                
+                # 计算拇指伸直程度和弯曲手指比率
+                is_thumb_straight = thumb_straightness > thumb_base_length * self.thumb_straightness_threshold
+                
+                if bent_fingers > 0:
+                    finger_bend_ratio /= bent_fingers
+                
+                # 特征4: 拇指方向
+                y_distance = thumb_tip[1] - thumb_mcp[1]
+                
+                # 特征5: 拇指朝向
+                thumb_direction_y = thumb_tip[1] - thumb_ip[1]
+                
+                # 判断是否是握拳状态
+                is_fist = bent_fingers >= self.thumb_bent_fingers_count
+                
+                # 拇指分离度
+                is_thumb_separated = dist_to_index > 0.1
+                
+                # 计算区分度
+                distinction_ratio = abs(y_distance) / (finger_bend_ratio + 0.001)
+                
+                # 初始化结果
+                is_thumb_up = False
+                is_thumb_down = False
+                
+                # 增强判断条件
+                if is_thumb_straight and is_fist and is_thumb_separated:
+                    if y_distance < -self.thumb_y_distance_threshold and thumb_direction_y < 0:
+                        if distinction_ratio > self.fist_distinction_factor:
+                            is_thumb_up = True
+                    elif y_distance > self.thumb_y_distance_threshold and thumb_direction_y > 0:
+                        if distinction_ratio > self.fist_distinction_factor:
+                            is_thumb_down = True
+                
+                # 详细调试输出
+                if show_debug:
+                    print(f"拇指手势分析:")
+                    print(f"  拇指伸直度: {is_thumb_straight} ({thumb_straightness:.3f} > {thumb_base_length * self.thumb_straightness_threshold:.3f})")
+                    print(f"  弯曲手指数: {bent_fingers}/{len(finger_tips)}")
+                    print(f"  手指弯曲详情: {', '.join(finger_bend_details)}")
+                    print(f"  拇指Y距离: {y_distance:.3f} (阈值: {self.thumb_y_distance_threshold})")
+                    print(f"  拇指方向Y: {thumb_direction_y:.3f}")
+                    print(f"  拇指分离度: {is_thumb_separated} ({dist_to_index:.3f})")
+                    print(f"  区分比率: {distinction_ratio:.3f} (阈值: {self.fist_distinction_factor})")
+                    print(f"  判断结果: {'拇指向上' if is_thumb_up else '拇指向下' if is_thumb_down else '非拇指手势'}")
+            
+            # 检测结果输出
+            if is_thumb_up or is_thumb_down:
+                console_config = self.config.get('console_output', {})
+                if console_config.get('show_vsign_events', True):
+                    print(f"检测到拇指手势: {'向上' if is_thumb_up else '向下'}")
+            
+            return is_thumb_up, is_thumb_down
+            
+        except Exception as e:
+            # 输出错误信息
+            console_config = self.config.get('console_output', {})
+            if console_config.get('show_error_messages', True):
+                print(f"拇指手势检测错误: {e}")
+            return False, False
+    
+    # 使用MediaPipe手势识别器识别手势
+    def _recognize_gesture_with_mediapipe(self, frame) -> Optional[str]:
+        """
+        使用MediaPipe手势识别器识别手势
+        
+        将输入帧传递给MediaPipe手势识别器，获取识别结果并映射到系统状态
+        
+        Args:
+            frame: 输入图像帧，BGR格式
+            
+        Returns:
+            Optional[str]: 识别的手势名称，如果未识别到则返回None
+        """
+        if not self.use_mediapipe_gesture or self.gesture_recognizer is None:
+            return None
+            
+        try:
+            # 将OpenCV的BGR格式转换为MediaPipe需要的格式
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            
+            # 运行手势识别
+            recognition_result = self.gesture_recognizer.recognize(mp_image)
+            
+            # 检查是否有识别结果
+            if recognition_result and recognition_result.gestures and len(recognition_result.gestures) > 0:
+                # 获取置信度最高的手势
+                top_gesture = recognition_result.gestures[0]
+                
+                if top_gesture and len(top_gesture) > 0:
+                    gesture_name = top_gesture[0].category_name
+                    confidence = top_gesture[0].score
+                    
+                    # 检查置信度是否超过阈值
+                    gesture_confidence_threshold = self.config.get('gesture_confidence_threshold', 0.7)
+                    
+                    if confidence >= gesture_confidence_threshold:
+                        # 将MediaPipe手势名称映射到我们的状态名称
+                        if gesture_name in self.gesture_mapping:
+                            mapped_gesture = self.gesture_mapping[gesture_name]
+                            
+                            # 输出调试信息
+                            if self.config.get('console_output', {}).get('show_gesture_recognition', False):
+                                print(f"MediaPipe识别手势: {gesture_name}, 映射为: {mapped_gesture}, 置信度: {confidence:.2f}")
+                                
+                            return mapped_gesture
+                        else:
+                            # 输出调试信息
+                            if self.config.get('console_output', {}).get('show_gesture_recognition', False):
+                                print(f"MediaPipe识别到未映射手势: {gesture_name}, 置信度: {confidence:.2f}")
+            
+            return None
+        except Exception as e:
+            if self.config.get('console_output', {}).get('show_error_messages', True):
+                print(f"MediaPipe手势识别错误: {e}")
+            return None
+    
     def analyze_frame(self, frame: np.ndarray) -> Tuple[Optional[str], float, bool, Dict[str, Any]]:
         """
         分析单帧图像中的手势
@@ -320,101 +635,171 @@ class GestureAnalyzer:
             
         Returns:
             Tuple[Optional[str], float, bool, Dict[str, Any]]: 
-                - 手势状态: 'open'表示张开，'fist'表示握拳，'v-sign'表示V手势，None表示不确定
+                - 手势状态: 'open'表示张开，'fist'表示握拳，'v-sign'表示V手势，
+                          'thumb-up'表示拇指向上，'thumb-down'表示拇指向下，None表示不确定
                 - 开合度: 0.0-1.0的浮点数，表示手掌开合程度
                 - 是否是状态转换: 布尔值，指示是否从张开变为握拳的瞬间
                 - 额外手势信息: 包含V手势、滑动方向等额外信息的字典
         """
-        frame_height, frame_width = frame.shape[:2]
-        
-        # 转换颜色空间
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        # 处理图像
-        self.last_results = self.hands.process(rgb_frame)
-        
-        # 重置转换标记
-        self.transition_detected = False
-        
-        # 额外手势信息
-        extra_gestures = {
-            "vsign_detected": False,
-            "vsign_swiped": False,
-            "swipe_direction": None,
-            "tracking_point": None,
-            "direction_locked": self.direction_locked,
-            "swipe_complete": self.swipe_complete
-        }
-        
-        if not self.last_results.multi_hand_landmarks:
-            return None, 0.0, False, extra_gestures
+        try:
+            frame_height, frame_width = frame.shape[:2]
             
-        # 获取第一个检测到的手
-        hand_landmarks = self.last_results.multi_hand_landmarks[0]
-        
-        # 提取关键点坐标
-        landmarks = [(lm.x, lm.y, lm.z) for lm in hand_landmarks.landmark]
-        
-        # 计算开合度
-        openness = self._calculate_openness(landmarks)
-        
-        # 检测V-sign手势
-        is_vsign = self._is_vsign_gesture(landmarks)
-        extra_gestures["vsign_detected"] = is_vsign
-        
-        # 判断基本状态
-        thresholds = self.config['thresholds']
-        if is_vsign:
-            new_state = 'v-sign'
-            # 如果是V-sign，获取跟踪点
-            tracking_point = self._get_vsign_tracking_point(landmarks)
-            extra_gestures["tracking_point"] = tracking_point
+            # 转换颜色空间
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             
-            # 检测V-sign的滑动
-            swiped, direction = self._detect_vsign_swipe(landmarks, frame_width)
-            if swiped:
-                extra_gestures["vsign_swiped"] = True
-                extra_gestures["swipe_direction"] = direction
-        elif openness <= thresholds['fist_max']:
-            new_state = 'fist'
-        elif openness >= thresholds['open_min']:
-            new_state = 'open'
-        else:
-            new_state = None
-        
-        # 状态防抖
-        if new_state == self.current_state:
-            self.state_counter += 1
-        else:
-            self.state_counter = 1
-            self.current_state = new_state
+            # 处理图像
+            self.last_results = self.hands.process(rgb_frame)
             
-        # 需要连续3帧相同状态才确认
-        required_frames = 3  # 减少确认帧数，提高灵敏度
-        
-        if self.state_counter >= required_frames:
-            # 检测状态转换的瞬间
-            if self.last_confirmed_state != self.current_state:
-                # 记录最后确认的状态
-                prev_state = self.last_confirmed_state
-                self.last_confirmed_state = self.current_state
+            # 重置转换标记
+            self.transition_detected = False
+            
+            # 额外手势信息
+            extra_gestures = {
+                "vsign_detected": False,
+                "vsign_swiped": False,
+                "swipe_direction": None,
+                "tracking_point": None,
+                "direction_locked": self.direction_locked,
+                "swipe_complete": self.swipe_complete,
+                "thumb_up": False,
+                "thumb_down": False
+            }
+            
+            if not self.last_results.multi_hand_landmarks:
+                return None, 0.0, False, extra_gestures
                 
-                # 只有当从open到fist状态转换时设置last_state和触发标记
-                if prev_state == 'open' and self.current_state == 'fist':
-                    self.last_state = prev_state
-                    self.transition_detected = True
-                    # 输出终端信息（根据配置决定是否显示）
-                    if self.config.get('console_output', {}).get('show_state_changes', True):
-                        print(f"状态变化: {prev_state} -> {self.current_state} (触发)")
+            # 获取第一个检测到的手
+            hand_landmarks = self.last_results.multi_hand_landmarks[0]
+            
+            # 提取关键点坐标
+            landmarks = [(lm.x, lm.y, lm.z) for lm in hand_landmarks.landmark]
+            
+            # 计算开合度
+            openness = self._calculate_openness(landmarks)
+            
+            # 使用MediaPipe手势识别器（如果启用）
+            mediapipe_gesture = None
+            if self.use_mediapipe_gesture:
+                mediapipe_gesture = self._recognize_gesture_with_mediapipe(frame)
+            
+            # 检测V-sign手势
+            is_vsign = self._is_vsign_gesture(landmarks)
+            extra_gestures["vsign_detected"] = is_vsign
+            
+            # 检测拇指手势（优先于基本状态检测，避免状态冲突）
+            is_thumb_up = False
+            is_thumb_down = False
+            
+            try:
+                if self.thumb_cooldown <= 0:
+                    # 如果使用MediaPipe手势识别器且识别到了拇指手势，则优先使用其结果
+                    if mediapipe_gesture in ['thumb-up', 'thumb-down']:
+                        is_thumb_up = mediapipe_gesture == 'thumb-up'
+                        is_thumb_down = mediapipe_gesture == 'thumb-down'
+                    else:
+                        # 否则使用我们自己的拇指手势识别方法
+                        is_thumb_up, is_thumb_down = self._is_thumb_gesture(hand_landmarks.landmark)
+                    
+                    if is_thumb_up or is_thumb_down:
+                        self.thumb_cooldown = self.thumb_cooldown_frames
+                        extra_gestures["thumb_up"] = is_thumb_up
+                        extra_gestures["thumb_down"] = is_thumb_down
                 else:
-                    # 其他状态变化不触发，但记录last_state
-                    self.last_state = prev_state
-                    # 输出终端信息（根据配置决定是否显示）
-                    if self.config.get('console_output', {}).get('show_state_changes', True):
-                        print(f"状态变化: {prev_state} -> {self.current_state} (不触发)")
-                
-                return self.current_state, openness, self.transition_detected, extra_gestures
-                
-            return self.current_state, openness, False, extra_gestures
+                    self.thumb_cooldown -= 1
+            except Exception as e:
+                console_config = self.config.get('console_output', {})
+                if console_config.get('show_error_messages', True):
+                    print(f"处理拇指手势时出错: {e}")
+                self.thumb_cooldown -= 1
             
-        return None, openness, False, extra_gestures
+            # 判断基本状态 - 考虑特殊手势的优先级
+            thresholds = self.config['thresholds']
+            
+            # 如果MediaPipe识别到了手势，优先使用其结果
+            if mediapipe_gesture:
+                new_state = mediapipe_gesture
+                
+                # 对于V手势，我们仍需要处理滑动相关逻辑
+                if new_state == 'v-sign':
+                    # 获取跟踪点
+                    tracking_point = self._get_vsign_tracking_point(landmarks)
+                    extra_gestures["tracking_point"] = tracking_point
+                    
+                    # 检测V-sign的滑动
+                    swiped, direction = self._detect_vsign_swipe(landmarks, frame_width)
+                    if swiped:
+                        extra_gestures["vsign_swiped"] = True
+                        extra_gestures["swipe_direction"] = direction
+            else:
+                # 否则使用我们自己的手势识别逻辑
+                if is_vsign:
+                    new_state = 'v-sign'
+                    # 获取跟踪点
+                    tracking_point = self._get_vsign_tracking_point(landmarks)
+                    extra_gestures["tracking_point"] = tracking_point
+                    
+                    # 检测V-sign的滑动
+                    swiped, direction = self._detect_vsign_swipe(landmarks, frame_width)
+                    if swiped:
+                        extra_gestures["vsign_swiped"] = True
+                        extra_gestures["swipe_direction"] = direction
+                elif is_thumb_up:
+                    new_state = 'thumb-up'
+                elif is_thumb_down:
+                    new_state = 'thumb-down'
+                elif openness <= thresholds['fist_max']:
+                    new_state = 'fist'
+                elif openness >= thresholds['open_min']:
+                    new_state = 'open'
+                else:
+                    new_state = None
+            
+            # 状态防抖
+            if new_state == self.current_state:
+                self.state_counter += 1
+            else:
+                self.state_counter = 1
+                self.current_state = new_state
+                
+            # 需要连续3帧相同状态才确认
+            required_frames = 3  # 减少确认帧数，提高灵敏度
+            
+            if self.state_counter >= required_frames:
+                # 检测状态转换的瞬间
+                if self.last_confirmed_state != self.current_state:
+                    # 记录最后确认的状态
+                    prev_state = self.last_confirmed_state
+                    self.last_confirmed_state = self.current_state
+                    
+                    # 只有当从open到fist状态转换时设置last_state和触发标记
+                    if prev_state == 'open' and self.current_state == 'fist':
+                        self.last_state = prev_state
+                        self.transition_detected = True
+                        # 输出终端信息（根据配置决定是否显示）
+                        if self.config.get('console_output', {}).get('show_state_changes', True):
+                            print(f"状态变化: {prev_state} -> {self.current_state} (触发)")
+                    else:
+                        # 其他状态变化不触发，但记录last_state
+                        self.last_state = prev_state
+                        # 输出终端信息（根据配置决定是否显示）
+                        if self.config.get('console_output', {}).get('show_state_changes', True):
+                            print(f"状态变化: {prev_state} -> {self.current_state} (不触发)")
+                    
+                    return self.current_state, openness, self.transition_detected, extra_gestures
+                    
+                return self.current_state, openness, False, extra_gestures
+                
+            return None, openness, False, extra_gestures
+            
+        except Exception as e:
+            console_config = self.config.get('console_output', {})
+            if console_config.get('show_error_messages', True):
+                print(f"手势分析过程中出错: {e}")
+            return None, 0.0, False, {"vsign_detected": False, "vsign_swiped": False, "swipe_direction": None,
+                                     "tracking_point": None, "direction_locked": False, "swipe_complete": False,
+                                     "thumb_up": False, "thumb_down": False}
+    
+    @property
+    def console_config(self):
+        """获取控制台配置"""
+        return self.config.get('console_output', {})

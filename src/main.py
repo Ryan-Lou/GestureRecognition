@@ -74,6 +74,11 @@ class GestureController:
         self.cached_state = None
         self.cached_openness = 0.0
         
+        # 音量控制相关变量
+        self.volume_level = 50  # 默认音量为50%
+        self.volume_change_time = 0
+        self.volume_display_duration = self.config.get('volume_display_duration', 2.0)  # 音量显示持续时间（秒）
+        
     def _load_config(self, config_path: str) -> dict:
         """加载配置文件"""
         with open(config_path, 'r', encoding='utf-8') as f:
@@ -180,6 +185,10 @@ class GestureController:
             viz_config=self.viz_config
         )
         
+        # 如果启用了音量控制相关UI，绘制音量条
+        if self.viz_config.get('show_volume_bar', True):
+            ui_frame = UIDrawer.draw_volume_bar(ui_frame, self.volume_level)
+        
         # 检查并触发动作 - 从张开到握拳触发空格键
         if is_transition:
             triggered = self.trigger.trigger_space()
@@ -210,7 +219,58 @@ class GestureController:
                         y_offset=UIConfig.TRIGGER_Y_OFFSET,
                         color=UIConfig.TRIGGER_DIR_COLOR
                     )
+        
+        # 检查拇指手势
+        try:
+            # 检查状态直接判断 - 将状态判断和额外信息判断结合起来
+            is_thumb_up = (state == 'thumb-up') or extra_gestures.get("thumb_up", False)
+            is_thumb_down = (state == 'thumb-down') or extra_gestures.get("thumb_down", False)
+            
+            if is_thumb_up or is_thumb_down:
+                # 确定音量变化方向
+                volume_direction = "up" if is_thumb_up else "down"
+                
+                # 触发按键
+                key_triggered = self.trigger.trigger_direction_key(volume_direction)
+                
+                if key_triggered:
+                    # 更新音量级别（模拟值）
+                    volume_change = self.config.get('volume_change_step', 5)  # 从配置中获取音量变化步长
+                    if volume_direction == "up":
+                        self.volume_level = min(100, self.volume_level + volume_change)
+                    else:
+                        self.volume_level = max(0, self.volume_level - volume_change)
                     
+                    # 记录音量变化时间
+                    self.volume_change_time = time.time()
+                    
+                    # 在画面上显示音量提示
+                    if self.viz_config.get('show_trigger_info', True):
+                        display_text = f"音量: {self.volume_level}%"
+                        ui_frame = UIDrawer.draw_trigger_notification(
+                            frame=ui_frame,
+                            text=display_text,
+                            y_offset=-UIConfig.TRIGGER_Y_OFFSET,
+                            color=UIConfig.COLOR_CYAN
+                        )
+                    
+                    # 记录到控制台
+                    if self.console_config.get('show_volume_events', True):
+                        print(f"音量{'增加' if volume_direction == 'up' else '减少'}到 {self.volume_level}%")
+        
+            # 检查是否需要继续显示音量信息
+            elif time.time() - self.volume_change_time < self.volume_display_duration:
+                display_text = f"音量: {self.volume_level}%"
+                ui_frame = UIDrawer.draw_trigger_notification(
+                    frame=ui_frame,
+                    text=display_text,
+                    y_offset=-UIConfig.TRIGGER_Y_OFFSET,
+                    color=UIConfig.COLOR_CYAN
+                )
+        except Exception as e:
+            if self.console_config.get('show_error_messages', True):
+                print(f"音量控制处理异常: {e}")
+        
         return ui_frame
     
     def run(self):
@@ -224,6 +284,8 @@ class GestureController:
                 print("1. 从张开到握拳：触发空格键")
                 print("2. V手势向右滑动：触发右方向键")
                 print("3. V手势向左滑动：触发左方向键")
+                print("4. 拇指向上：增加音量")
+                print("5. 拇指向下：减少音量")
             
             # 启动处理线程
             self.is_processing_active = True

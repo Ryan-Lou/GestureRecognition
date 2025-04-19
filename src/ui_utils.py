@@ -66,6 +66,16 @@ class UIConfig:
     TRIGGER_BG_ALPHA = 0.5
     TRIGGER_TEXT_COLOR = COLOR_RED
     TRIGGER_DIR_COLOR = COLOR_BLUE
+    TRIGGER_VOLUME_COLOR = COLOR_CYAN
+    
+    # 音量显示配置
+    VOLUME_BAR_WIDTH = 200
+    VOLUME_BAR_HEIGHT = 20
+    VOLUME_BAR_X = 40
+    VOLUME_BAR_Y = 200
+    VOLUME_BAR_BG_COLOR = COLOR_WHITE
+    VOLUME_BAR_FG_COLOR = COLOR_CYAN
+    VOLUME_FONT_SIZE = FONT_SMALL_SIZE
     
     # V手势信息配置
     VSIGN_FONT_SIZE = FONT_BASE_SIZE
@@ -96,6 +106,14 @@ class UIConfig:
     # 轨迹配置
     TRACK_COLOR = COLOR_GREEN
     TRACK_THICKNESS = 2
+    
+    # 拇指手势标记配置
+    THUMB_TIP_SIZE = 14           # 拇指指尖标记大小
+    THUMB_COLOR_UP = COLOR_GREEN  # 拇指向上颜色
+    THUMB_COLOR_DOWN = COLOR_RED  # 拇指向下颜色
+    THUMB_TEXT_OFFSET_X = 40      # 拇指手势文本X偏移
+    THUMB_TEXT_OFFSET_Y = -30     # 拇指手势文本Y偏移
+    THUMB_FONT_SIZE = FONT_SMALL_SIZE  # 拇指手势文本大小
 
 
 class UIDrawer:
@@ -197,6 +215,12 @@ class UIDrawer:
             elif state == 'v-sign':
                 color = UIConfig.COLOR_PURPLE
                 state_text = "状态: V手势"
+            elif state == 'thumb-up':
+                color = UIConfig.COLOR_GREEN
+                state_text = "状态: 拇指向上"
+            elif state == 'thumb-down':
+                color = UIConfig.COLOR_RED
+                state_text = "状态: 拇指向下"
             else:
                 color = UIConfig.COLOR_WHITE
                 state_text = f"状态: {state}"
@@ -265,6 +289,10 @@ class UIDrawer:
                     last_state_text = '握拳'
                 elif last_state == 'v-sign':
                     last_state_text = 'V手势'
+                elif last_state == 'thumb-up':
+                    last_state_text = '拇指向上'
+                elif last_state == 'thumb-down':
+                    last_state_text = '拇指向下'
                 else:
                     last_state_text = last_state
                     
@@ -274,6 +302,10 @@ class UIDrawer:
                     current_state_text = '握拳'
                 elif current_state == 'v-sign':
                     current_state_text = 'V手势'
+                elif current_state == 'thumb-up':
+                    current_state_text = '拇指向上'
+                elif current_state == 'thumb-down':
+                    current_state_text = '拇指向下'
                 else:
                     current_state_text = current_state
                 
@@ -292,7 +324,9 @@ class UIDrawer:
                 "手势说明:",
                 "1. 从张开到握拳: 空格键",
                 "2. V手势向右滑动: 前进",
-                "3. V手势向左滑动: 后退"
+                "3. V手势向左滑动: 后退",
+                "4. 拇指向上: 增加音量",
+                "5. 拇指向下: 减少音量"
             ]
             
             for i, text in enumerate(instructions):
@@ -401,6 +435,38 @@ class UIDrawer:
                 # 获取关键点列表
                 landmarks = hand_landmarks.landmark
                 
+                # 获取拇指指尖位置
+                thumb_tip = (int(landmarks[4].x * width), int(landmarks[4].y * height))
+                thumb_mcp = (int(landmarks[2].x * width), int(landmarks[2].y * height))
+                
+                # 检查是否是拇指手势
+                is_thumb_up = extra_info.get("thumb_up", False)
+                is_thumb_down = extra_info.get("thumb_down", False)
+                
+                # 突出显示拇指指尖和状态
+                if is_thumb_up or is_thumb_down:
+                    # 确定颜色
+                    thumb_color = UIConfig.THUMB_COLOR_UP if is_thumb_up else UIConfig.THUMB_COLOR_DOWN
+                    
+                    # 绘制拇指指尖标记（较大的圆圈）
+                    cv2.circle(frame, thumb_tip, UIConfig.THUMB_TIP_SIZE, thumb_color, -1)
+                    
+                    # 绘制拇指状态线 - 从拇指掌指关节到拇指尖的线
+                    cv2.line(frame, thumb_mcp, thumb_tip, thumb_color, 4)
+                    
+                    # 在拇指附近显示状态文本
+                    text_pos_x = thumb_tip[0] + UIConfig.THUMB_TEXT_OFFSET_X
+                    text_pos_y = thumb_tip[1] + UIConfig.THUMB_TEXT_OFFSET_Y
+                    status_text = "音量+" if is_thumb_up else "音量-"
+                    
+                    frame = UIDrawer.put_chinese_text(
+                        frame,
+                        status_text,
+                        (text_pos_x, text_pos_y),
+                        thumb_color,
+                        UIConfig.THUMB_FONT_SIZE
+                    )
+                
                 # 获取食指和中指指尖位置
                 index_tip = (int(landmarks[8].x * width), int(landmarks[8].y * height))
                 middle_tip = (int(landmarks[12].x * width), int(landmarks[12].y * height))
@@ -497,4 +563,60 @@ class UIDrawer:
                       int(position_history[i][1] * frame.shape[0]))
                 cv2.line(frame, pt1, pt2, UIConfig.TRACK_COLOR, UIConfig.TRACK_THICKNESS)
             
+        return frame
+    
+    @staticmethod
+    def draw_volume_bar(frame: np.ndarray, volume_level: int) -> np.ndarray:
+        """
+        绘制音量条
+        
+        在图像上绘制一个表示当前音量大小的进度条。
+        
+        Args:
+            frame: 输入图像帧
+            volume_level: 音量级别（0-100）
+            
+        Returns:
+            np.ndarray: 绘制了音量条的图像帧
+        """
+        # 计算进度条位置
+        bar_x = UIConfig.VOLUME_BAR_X
+        bar_y = UIConfig.VOLUME_BAR_Y
+        bar_width = UIConfig.VOLUME_BAR_WIDTH
+        bar_height = UIConfig.VOLUME_BAR_HEIGHT
+        
+        # 绘制背景
+        cv2.rectangle(frame, 
+                     (bar_x, bar_y), 
+                     (bar_x + bar_width, bar_y + bar_height), 
+                     UIConfig.VOLUME_BAR_BG_COLOR, 
+                     -1)
+        
+        # 计算填充宽度
+        fill_width = int(bar_width * volume_level / 100)
+        
+        # 绘制填充部分
+        cv2.rectangle(frame, 
+                     (bar_x, bar_y), 
+                     (bar_x + fill_width, bar_y + bar_height), 
+                     UIConfig.VOLUME_BAR_FG_COLOR, 
+                     -1)
+        
+        # 绘制边框
+        cv2.rectangle(frame, 
+                     (bar_x, bar_y), 
+                     (bar_x + bar_width, bar_y + bar_height), 
+                     UIConfig.COLOR_BLACK, 
+                     1)
+        
+        # 绘制文本
+        volume_text = f"音量: {volume_level}%"
+        frame = UIDrawer.put_chinese_text(
+            frame, 
+            volume_text, 
+            (bar_x, bar_y - 5), 
+            UIConfig.COLOR_BLACK, 
+            UIConfig.VOLUME_FONT_SIZE
+        )
+        
         return frame 

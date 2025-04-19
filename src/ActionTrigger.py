@@ -61,7 +61,7 @@ class ActionTrigger:
         触发方向键
         
         Args:
-            direction: 方向，"left"或"right"
+            direction: 方向，"left"、"right"、"up"或"down"
             
         Returns:
             bool: 是否成功触发
@@ -74,7 +74,24 @@ class ActionTrigger:
             
         try:
             # 根据方向选择按键
-            key = Key.left if direction == "left" else Key.right
+            if direction == "left":
+                key = Key.left
+                key_code = "{LEFT}"
+                direction_text = "左"
+            elif direction == "right":
+                key = Key.right
+                key_code = "{RIGHT}"
+                direction_text = "右"
+            elif direction == "up":
+                key = Key.up
+                key_code = "{UP}"
+                direction_text = "上"
+            elif direction == "down":
+                key = Key.down
+                key_code = "{DOWN}"
+                direction_text = "下"
+            else:
+                return False
             
             # 方法1: 使用pynput
             self.keyboard.press(key)
@@ -83,7 +100,6 @@ class ActionTrigger:
             
             # 方法2: 使用系统命令（备用方案）
             if self.config.get('use_system_cmd', False):
-                key_code = "{LEFT}" if direction == "left" else "{RIGHT}"
                 os.system(f'powershell -command "$wshell = New-Object -ComObject wscript.shell; $wshell.SendKeys(\'{key_code}\')"')
                 
             # 更新最后触发时间
@@ -92,7 +108,7 @@ class ActionTrigger:
             # 获取终端输出配置
             console_config = self.config.get('console_output', {})
             if console_config.get('show_trigger_events', True):
-                print(f"触发{direction}方向键!")
+                print(f"触发{direction_text}方向键!")
                 
             return True
         except Exception as e:
