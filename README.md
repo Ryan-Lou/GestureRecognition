@@ -41,24 +41,6 @@ cd gesture-control
 pip install -r requirements.txt
 ```
 
-3. 下载MediaPipe手势识别模型
-
-```bash
-# 创建模型目录
-mkdir -p models
-
-# 下载手势识别模型
-# 可以从 MediaPipe 官方网站下载 gesture_recognizer.task 模型
-# 下载地址: https://developers.google.com/mediapipe/solutions/vision/gesture_recognizer/index#models
-# 将下载的模型文件放在 models/ 目录下
-```
-
-4. 运行主程序
-
-```bash
-python src/main.py
-```
-
 ## 使用方法
 
 1. 运行主程序
@@ -102,11 +84,8 @@ thresholds:
 cooldown: 1.0    # 触发冷却时间（秒）
 use_system_cmd: true  # 是否使用系统命令触发按键
 salute_trigger_threshold: 0.1  # 二指敬礼滑动触发阈值（屏幕宽度的10%）
-
-# MediaPipe手势识别设置
-use_mediapipe_gesture: true  # 是否使用MediaPipe手势识别
-mediapipe_gesture_model_path: 'models/gesture_recognizer.task'  # 手势识别模型路径
-gesture_confidence_threshold: 0.7  # 手势识别置信度阈值
+thumb_gesture_cooldown: 15  # 拇指手势冷却帧数
+volume_change_step: 5   # 每次音量变化步长（%）
 
 camera:
   id: 0          # 摄像头ID
@@ -137,8 +116,7 @@ visualization:
 ## 核心技术
 
 - MediaPipe Hands：用于实时手部检测和关键点识别
-- MediaPipe Gesture Recognizer：用于精确识别手势，特别是拇指向上/向下手势
-- 手势开合度算法：基于手指指尖到指根的距离与指根到手腕的距离的比值
+- 手势开合度算法：基于手指指尖到指根的距离与指根到手腕距离的比值
 - 二指敬礼手势识别：基于手指伸直程度和并拢程度的计算
 - 滑动检测算法：基于手掌中心点的水平位移计算
 - 状态防抖机制：需要连续3帧相同状态才确认
@@ -146,7 +124,6 @@ visualization:
 
 ## 最近更新
 
-- 集成MediaPipe Gesture Recognizer，提高拇指手势识别准确率，减少误触发
 - 实现了拇指向上/向下手势控制音量功能
 - 实现了V形手势左右滑动触发左右方向键功能，可用于视频前进/后退控制
 - 优化了手势识别算法，提高了V形手势和拇指手势识别的准确率

@@ -10,17 +10,12 @@ thumb_gesture_cooldown: 15  # 拇指手势冷却帧数
 volume_display_duration: 2.0  # 音量变化显示持续时间（秒）
 volume_change_step: 5   # 每次音量变化步长（%）
 
-# MediaPipe手势识别设置
-use_mediapipe_gesture: true     # 是否使用MediaPipe手势识别
-mediapipe_gesture_model_path: 'models/gesture_recognizer.task'  # 手势识别模型路径
-gesture_confidence_threshold: 0.7  # 手势识别置信度阈值
-
 # 拇指手势识别参数
 thumb_gesture:
   straightness_threshold: 0.7  # 拇指伸直度阈值（0.0-1.0），越大要求越直
   bent_fingers_count: 3        # 判定为握拳状态需要弯曲的手指数量
-  y_distance_threshold: 0.07   # 拇指尖与掌指关节的Y坐标差异阈值（增大以减少误识别）
-  fist_distinction_factor: 0.5 # 拇指手势与握拳区分系数（增大以增强区分度）
+  y_distance_threshold: 0.05   # 拇指尖与掌指关节的Y坐标差异阈值
+  fist_distinction_factor: 0.3 # 拇指手势与握拳区分系数（越大区分越明显）
 
 camera:
   camera_index: 0
@@ -57,5 +52,4 @@ console_output:
   show_trigger_events: true       # 是否显示触发事件信息
   show_error_messages: true       # 是否显示错误信息
   show_volume_events: true        # 是否显示音量变化信息
-  show_thumb_debug: false          # 是否显示拇指手势调试详细数据（启用以帮助调试）
-  show_gesture_recognition: true  # 是否显示MediaPipe手势识别结果 
+  show_thumb_debug: false         # 是否显示拇指手势调试详细数据 
