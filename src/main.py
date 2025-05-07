@@ -23,7 +23,7 @@ class GestureController:
     """手势控制器主类"""
     
     def __init__(self, config_path: str):
-        """q
+        """
         初始化手势控制器
         
         Args:

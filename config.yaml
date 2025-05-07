@@ -1,23 +1,31 @@
 thresholds:
-  fist_max: 0.3  # 握拳阈值上限
-  open_min: 0.7  # 张开阈值下限
-cooldown: 1.0      # 冷却时间（秒）
-use_system_cmd: false  # 使用系统命令触发按键
-vsign_trigger_threshold: 0.1  # V-sign手势滑动触发阈值（屏幕宽度的10%）
-center_position: 0.5    # 屏幕中心位置（归一化坐标，范围0-1）
-reset_threshold: 0.1    # 复位阈值，接近中心位置的范围
-thumb_gesture_cooldown: 10  # 拇指手势冷却帧数 - 降低以提高响应速度
-volume_display_duration: 2.0  # 音量变化显示持续时间（秒）
-volume_change_step: 5   # 每次音量变化步长（%）
+  fist_max: 0.2  # 握拳阈值上限
+  open_min: 0.6  # 张开阈值下限
+
+# 触发控制参数
+cooldown: 1.0  # 冷却时间（秒）
+vsign_trigger_threshold: 0.2  # V-sign手势滑动触发阈值（屏幕宽度的20%）
+thumb_consecutive_required: 5  # 拇指手势需要连续几帧才能触发，减少误触
+thumb_gesture_cooldown: 30  # 拇指手势冷却帧数
 trigger_notification_duration: 1.0  # 触发提示显示持续时间（秒）
+volume_change_step: 5   # 每次音量变化步长（%）
+volume_display_duration: 2.0  # 音量变化显示持续时间（秒）
+
+# 位置控制参数
+center_position: 0.5  # 屏幕中心位置（归一化坐标，范围0-1）
+reset_threshold: 0.1  # 复位阈值，接近中心位置的范围
+
+# 系统配置
+use_system_cmd: false  # 使用系统命令触发按键
 
 # 拇指手势识别参数
 thumb_gesture:
-  straightness_threshold: 0.75  # 拇指伸直度阈值（0.0-1.0），适当降低以提高检测灵敏度
-  bent_fingers_count: 3        # 判定为握拳状态需要弯曲的手指数量，降低以增强区分度
-  y_distance_threshold: 0.04   # 拇指尖与掌指关节的Y坐标差异阈值，降低以提高灵敏度
-  fist_distinction_factor: 0.6 # 拇指手势与握拳区分系数（越大区分越明显），提高以增强区分度
+  straightness_threshold: 0.80  # 拇指伸直度阈值（0.0-1.0），增加以减少误识别
+  bent_fingers_count: 3  # 判定为握拳状态需要弯曲的手指数量
+  y_distance_threshold: 0.10  # 拇指尖与掌指关节的Y坐标差异阈值
+  fist_distinction_factor: 0.75  # 拇指手势与握拳区分系数（越大区分越明显）
 
+# 摄像头配置
 camera:
   camera_index: 0
   width: 640
@@ -30,36 +38,29 @@ visualization:
   window_name: "Gesture Control"  # 窗口名称
   
   # UI元素显示开关
-  show_landmarks: true            # 是否显示手部关键点
-  show_state: true                # 是否显示手势状态（左上角）
-  show_openness_bar: true         # 是否显示开合度进度条（底部）
-  show_fps: true                  # 是否显示FPS（右上角）
-  show_trigger_history: true      # 是否显示触发历史（左侧）
-  show_trigger_notification: true # 是否显示触发提示（临时1秒）
-  show_tracking_path: true        # 是否显示手指轨迹
-  show_center_line: true          # 是否显示中心线
-  show_reset_area: true           # 是否显示复位区域
-  
-  # 已移除的UI元素（保留注释以便参考）
-  # show_gesture_history: false   # 旧的手势历史显示，已替换为触发历史
-  # show_instructions: false      # 手势说明已移除
-  # show_vsign_info: false        # V手势信息已简化，集成到状态显示
-  # show_volume_bar: false        # 音量条已移除
-  # show_thumb_info: false        # 拇指手势信息已简化，集成到状态显示
+  show_landmarks: true  # 是否显示手部关键点
+  show_state: true  # 是否显示手势状态（左上角）
+  show_openness_bar: true  # 是否显示开合度进度条（底部）
+  show_fps: true  # 是否显示FPS（右上角）
+  show_trigger_history: true  # 是否显示触发历史（左侧）
+  show_trigger_notification: true  # 是否显示触发提示（临时1秒）
+  show_tracking_path: true  # 是否显示手指轨迹
+  show_center_line: true  # 是否显示中心线
+  show_reset_area: true  # 是否显示复位区域
   
   # 历史记录颜色配置
   history_colors:
-    space_key: [0, 0, 255]       # 空格键触发显示为红色
-    volume_keys: [0, 255, 0]     # 音量控制显示为绿色
-    direction_keys: [255, 0, 255] # 方向键显示为紫色
+    space_key: [0, 0, 255]  # 空格键触发显示为红色
+    volume_keys: [0, 255, 0]  # 音量控制显示为绿色
+    direction_keys: [255, 0, 255]  # 方向键显示为紫色
 
 # 终端输出配置
 console_output:
-  show_startup_info: true         # 是否显示启动信息
-  show_state_changes: true        # 是否显示状态变化信息
-  show_vsign_events: true         # 是否显示V手势事件信息
-  show_reset_events: true         # 是否显示复位事件信息
-  show_trigger_events: true       # 是否显示触发事件信息
-  show_error_messages: true       # 是否显示错误信息
-  show_volume_events: true        # 是否显示音量变化信息
-  show_thumb_debug: false         # 是否显示拇指手势调试详细数据 
+  show_startup_info: true  # 是否显示启动信息
+  show_state_changes: true  # 是否显示状态变化信息
+  show_vsign_events: true  # 是否显示V手势事件信息
+  show_reset_events: true  # 是否显示复位事件信息
+  show_trigger_events: true  # 是否显示触发事件信息
+  show_error_messages: true  # 是否显示错误信息
+  show_volume_events: true  # 是否显示音量变化信息
+  show_thumb_debug: false  # 是否显示拇指手势调试详细数据 
