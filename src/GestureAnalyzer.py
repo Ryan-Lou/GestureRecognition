@@ -369,6 +369,21 @@ class GestureAnalyzer:
                 cos_angle = dot_product / (thumb_mag * palm_mag)
                 angle = math.acos(min(max(cos_angle, -1.0), 1.0))
                 
+                # 计算拇指与手掌法线的夹角（增强区分度）
+                # 手掌法线是手掌向量的垂直方向
+                palm_normal_x = -palm_vec_y  # 垂直向量
+                palm_normal_y = palm_vec_x
+                
+                # 标准化法线向量
+                palm_normal_mag = math.sqrt(palm_normal_x**2 + palm_normal_y**2)
+                if palm_normal_mag > 0:
+                    palm_normal_x /= palm_normal_mag
+                    palm_normal_y /= palm_normal_mag
+                
+                # 计算拇指与手掌法线的点积
+                normal_dot = thumb_vec_x * palm_normal_x + thumb_vec_y * palm_normal_y
+                thumb_to_palm_orientation = normal_dot / thumb_mag if thumb_mag > 0 else 0
+                
                 # 检查拇指是否伸直
                 thumb_straightness = math.sqrt((thumb_tip.x - thumb_ip.x)**2 + 
                                                (thumb_tip.y - thumb_ip.y)**2 + 
@@ -384,6 +399,7 @@ class GestureAnalyzer:
                 finger_indices = [(8, 5), (12, 9), (16, 13), (20, 17)]
                 bent_fingers = 0
                 finger_bend_ratio = 0  # 用于记录弯曲程度
+                finger_curl_depth = 0  # 新增：记录手指弯曲深度
                 
                 for tip_idx, mcp_idx in finger_indices:
                     finger_tip = landmarks[tip_idx]
@@ -394,10 +410,16 @@ class GestureAnalyzer:
                     if bend_amount > 0:
                         bent_fingers += 1
                         finger_bend_ratio += bend_amount
+                        
+                        # 计算指尖到掌关节的Z轴距离，增强对握拳的识别
+                        z_diff = finger_tip.z - finger_mcp.z
+                        if z_diff > 0:  # 指尖更靠近相机，表示弯曲程度更大
+                            finger_curl_depth += z_diff
                 
                 # 平均弯曲程度
                 if bent_fingers > 0:
                     finger_bend_ratio /= bent_fingers
+                    finger_curl_depth /= bent_fingers
                     
                 # 判断是否是握拳状态 - 使用配置参数
                 is_fist = bent_fingers >= self.thumb_bent_fingers_count
@@ -409,6 +431,8 @@ class GestureAnalyzer:
                           f"弯曲手指数: {bent_fingers}, " +
                           f"Y距离: {thumb_tip.y - thumb_mcp.y:.3f}, " +
                           f"弯曲比率: {finger_bend_ratio:.3f}, " +
+                          f"弯曲深度: {finger_curl_depth:.3f}, " +
+                          f"拇指-手掌法线夹角: {thumb_to_palm_orientation:.3f}, " +
                           f"区分因子: {abs(thumb_tip.y - thumb_mcp.y) / (finger_bend_ratio + 0.001):.3f} > {self.fist_distinction_factor}")
                 
                 # 判断拇指方向
@@ -418,23 +442,38 @@ class GestureAnalyzer:
                 # 拇指尖与掌指关节的y坐标差距
                 y_distance = thumb_tip.y - thumb_mcp.y
                 
-                # 使用配置的阈值
+                # 使用配置的阈值和增强的区分算法
                 if is_thumb_straight and is_fist:
-                    # 增强与握拳的区分 - 使用弯曲程度和拇指突出程度的组合判断
-                    # 拇指应该明显地突出于其他手指
-                    if y_distance < -self.thumb_y_distance_threshold:  # 拇指尖在上方
-                        # 检查是否与握拳手势有足够区分度
-                        distinction_ratio = abs(y_distance) / (finger_bend_ratio + 0.001)  # 避免除以零
+                    # 增强与握拳的区分 - 使用多个因素综合判断
+                    # 1. 拇指应该明显地突出于其他手指
+                    # 2. 考虑拇指的朝向（与手掌法线的关系）
+                    # 3. 考虑其他手指的弯曲深度
+                    
+                    # 拇指向上条件：
+                    # - 拇指尖在上方（y坐标小于掌指关节）
+                    # - 距离超过阈值
+                    # - 与握拳有足够区分度
+                    if y_distance < -self.thumb_y_distance_threshold:
+                        # 增强的区分指标：结合y距离、弯曲深度和拇指朝向
+                        distinction_ratio = (abs(y_distance) * (1 + abs(thumb_to_palm_orientation))) / (finger_bend_ratio + finger_curl_depth + 0.001)
+                        
                         if distinction_ratio > self.fist_distinction_factor:
                             is_thumb_up = True
                             if show_debug:
-                                print(f"拇指向上: 区分比率 {distinction_ratio:.3f} > {self.fist_distinction_factor}")
-                    elif y_distance > self.thumb_y_distance_threshold:  # 拇指尖在下方
-                        distinction_ratio = abs(y_distance) / (finger_bend_ratio + 0.001)  # 避免除以零
+                                print(f"拇指向上: 增强区分比率 {distinction_ratio:.3f} > {self.fist_distinction_factor}")
+                    
+                    # 拇指向下条件：
+                    # - 拇指尖在下方（y坐标大于掌指关节）
+                    # - 距离超过阈值
+                    # - 与握拳有足够区分度
+                    elif y_distance > self.thumb_y_distance_threshold:
+                        # 增强的区分指标
+                        distinction_ratio = (abs(y_distance) * (1 + abs(thumb_to_palm_orientation))) / (finger_bend_ratio + finger_curl_depth + 0.001)
+                        
                         if distinction_ratio > self.fist_distinction_factor:
                             is_thumb_down = True
                             if show_debug:
-                                print(f"拇指向下: 区分比率 {distinction_ratio:.3f} > {self.fist_distinction_factor}")
+                                print(f"拇指向下: 增强区分比率 {distinction_ratio:.3f} > {self.fist_distinction_factor}")
                         
             else:
                 # landmarks是元组列表，格式为[(x, y, z), ...]
@@ -464,6 +503,20 @@ class GestureAnalyzer:
                 cos_angle = dot_product / (thumb_mag * palm_mag)
                 angle = math.acos(min(max(cos_angle, -1.0), 1.0))
                 
+                # 计算拇指与手掌法线的夹角（增强区分度）
+                palm_normal_x = -palm_vec_y  # 垂直向量
+                palm_normal_y = palm_vec_x
+                
+                # 标准化法线向量
+                palm_normal_mag = math.sqrt(palm_normal_x**2 + palm_normal_y**2)
+                if palm_normal_mag > 0:
+                    palm_normal_x /= palm_normal_mag
+                    palm_normal_y /= palm_normal_mag
+                
+                # 计算拇指与手掌法线的点积
+                normal_dot = thumb_vec_x * palm_normal_x + thumb_vec_y * palm_normal_y
+                thumb_to_palm_orientation = normal_dot / thumb_mag if thumb_mag > 0 else 0
+                
                 # 检查拇指是否伸直
                 thumb_straightness = np.linalg.norm(thumb_tip - thumb_ip)
                 thumb_base_length = np.linalg.norm(thumb_mcp - thumb_ip)
@@ -474,6 +527,7 @@ class GestureAnalyzer:
                 finger_indices = [(8, 5), (12, 9), (16, 13), (20, 17)]
                 bent_fingers = 0
                 finger_bend_ratio = 0  # 用于记录弯曲程度
+                finger_curl_depth = 0  # 新增：记录手指弯曲深度
                 
                 for tip_idx, mcp_idx in finger_indices:
                     finger_tip = np.array(landmarks[tip_idx])
@@ -485,9 +539,15 @@ class GestureAnalyzer:
                         bent_fingers += 1
                         finger_bend_ratio += bend_amount
                         
+                        # 计算指尖到掌关节的Z轴距离，增强对握拳的识别
+                        z_diff = finger_tip[2] - finger_mcp[2]
+                        if z_diff > 0:  # 指尖更靠近相机，表示弯曲程度更大
+                            finger_curl_depth += z_diff
+                        
                 # 平均弯曲程度
                 if bent_fingers > 0:
                     finger_bend_ratio /= bent_fingers
+                    finger_curl_depth /= bent_fingers
                 
                 # 使用配置参数
                 is_fist = bent_fingers >= self.thumb_bent_fingers_count
@@ -499,6 +559,8 @@ class GestureAnalyzer:
                           f"弯曲手指数: {bent_fingers}, " +
                           f"Y距离: {thumb_tip[1] - thumb_mcp[1]:.3f}, " +
                           f"弯曲比率: {finger_bend_ratio:.3f}, " +
+                          f"弯曲深度: {finger_curl_depth:.3f}, " +
+                          f"拇指-手掌法线夹角: {thumb_to_palm_orientation:.3f}, " +
                           f"区分因子: {abs(thumb_tip[1] - thumb_mcp[1]) / (finger_bend_ratio + 0.001):.3f} > {self.fist_distinction_factor}")
                 
                 # 判断拇指方向
@@ -509,20 +571,23 @@ class GestureAnalyzer:
                 y_distance = thumb_tip[1] - thumb_mcp[1]
                 
                 if is_thumb_straight and is_fist:
-                    # 增强与握拳的区分 - 使用弯曲程度和拇指突出程度的组合判断
+                    # 增强与握拳的区分 - 使用多个因素综合判断
                     if y_distance < -self.thumb_y_distance_threshold:  # y坐标比较
-                        # 检查是否与握拳手势有足够区分度
-                        distinction_ratio = abs(y_distance) / (finger_bend_ratio + 0.001)  # 避免除以零
+                        # 增强的区分指标：结合y距离、弯曲深度和拇指朝向
+                        distinction_ratio = (abs(y_distance) * (1 + abs(thumb_to_palm_orientation))) / (finger_bend_ratio + finger_curl_depth + 0.001)
+                        
                         if distinction_ratio > self.fist_distinction_factor:
                             is_thumb_up = True
                             if show_debug:
-                                print(f"拇指向上: 区分比率 {distinction_ratio:.3f} > {self.fist_distinction_factor}")
+                                print(f"拇指向上: 增强区分比率 {distinction_ratio:.3f} > {self.fist_distinction_factor}")
                     elif y_distance > self.thumb_y_distance_threshold:
-                        distinction_ratio = abs(y_distance) / (finger_bend_ratio + 0.001)  # 避免除以零
+                        # 增强的区分指标
+                        distinction_ratio = (abs(y_distance) * (1 + abs(thumb_to_palm_orientation))) / (finger_bend_ratio + finger_curl_depth + 0.001)
+                        
                         if distinction_ratio > self.fist_distinction_factor:
                             is_thumb_down = True
                             if show_debug:
-                                print(f"拇指向下: 区分比率 {distinction_ratio:.3f} > {self.fist_distinction_factor}")
+                                print(f"拇指向下: 增强区分比率 {distinction_ratio:.3f} > {self.fist_distinction_factor}")
             
             # 调试信息
             if is_thumb_up or is_thumb_down:

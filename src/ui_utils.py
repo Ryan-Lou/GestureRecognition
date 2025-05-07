@@ -183,12 +183,11 @@ class UIDrawer:
     
     @staticmethod
     def draw_ui_elements(frame: np.ndarray, state: Optional[str], openness: float, 
-                        fps: float, analyzer_instance, viz_config: Dict) -> np.ndarray:
+                        fps: float, analyzer_instance, viz_config: Dict, trigger_notification: Optional[str] = None) -> np.ndarray:
         """
         绘制主界面UI元素
         
-        在图像上绘制各种UI元素，包括状态文本、FPS计数器、开合度进度条、
-        手势历史记录和操作说明等，构成完整的用户界面。
+        在图像上绘制简化的UI元素，包括状态文本、帧率、开合度进度条和触发历史。
         
         Args:
             frame: 输入图像帧
@@ -197,15 +196,16 @@ class UIDrawer:
             fps: 当前帧率
             analyzer_instance: 手势分析器实例，用于获取历史状态信息
             viz_config: 可视化配置字典，控制各UI元素的显示与隐藏
+            trigger_notification: 当前触发的提示文本，如果为None则不显示
             
         Returns:
-            np.ndarray: 绘制了完整UI的图像帧
+            np.ndarray: 绘制了UI的图像帧
         """
         height, width = frame.shape[:2]
         
         # 绘制状态文本（左上角）
         if state and viz_config.get('show_state', True):
-            # 根据状态选择颜色
+            # 根据状态选择颜色和文本
             if state == 'open':
                 color = UIConfig.COLOR_GREEN
                 state_text = "状态: 张开"
@@ -214,7 +214,7 @@ class UIDrawer:
                 state_text = "状态: 握拳"
             elif state == 'v-sign':
                 color = UIConfig.COLOR_PURPLE
-                state_text = "状态: V手势"
+                state_text = "状态: 双指并拢"
             elif state == 'thumb-up':
                 color = UIConfig.COLOR_GREEN
                 state_text = "状态: 拇指向上"
@@ -225,6 +225,7 @@ class UIDrawer:
                 color = UIConfig.COLOR_WHITE
                 state_text = f"状态: {state}"
                 
+            # 绘制状态文本
             frame = UIDrawer.put_chinese_text(
                 frame, 
                 state_text, 
@@ -277,67 +278,54 @@ class UIDrawer:
                 UIConfig.BAR_TEXT_FONT_SIZE
             )
         
-        # 显示最新状态（底部）
-        if viz_config.get('show_gesture_history', True):
-            last_state = analyzer_instance.last_state
-            current_state = analyzer_instance.current_state
-            if last_state and current_state:
-                # 转换状态文本
-                if last_state == 'open':
-                    last_state_text = '张开'
-                elif last_state == 'fist':
-                    last_state_text = '握拳'
-                elif last_state == 'v-sign':
-                    last_state_text = 'V手势'
-                elif last_state == 'thumb-up':
-                    last_state_text = '拇指向上'
-                elif last_state == 'thumb-down':
-                    last_state_text = '拇指向下'
-                else:
-                    last_state_text = last_state
-                    
-                if current_state == 'open':
-                    current_state_text = '张开'
-                elif current_state == 'fist':
-                    current_state_text = '握拳'
-                elif current_state == 'v-sign':
-                    current_state_text = 'V手势'
-                elif current_state == 'thumb-up':
-                    current_state_text = '拇指向上'
-                elif current_state == 'thumb-down':
-                    current_state_text = '拇指向下'
-                else:
-                    current_state_text = current_state
+        # 绘制触发历史（左侧）
+        if viz_config.get('show_trigger_history', True):
+            trigger_history = viz_config.get('trigger_history', [])
+            if trigger_history:
+                # 只在有触发提示时显示，且显示设置为开启
+                if trigger_notification and viz_config.get('show_trigger_notification', True):
+                    frame = UIDrawer.put_chinese_text(
+                        frame,
+                        f"触发: {trigger_notification}",
+                        (UIConfig.STATE_POSITION_X, height - UIConfig.BAR_Y_OFFSET - 130),
+                        (0, 255, 0),  # 鲜绿色
+                        UIConfig.FONT_SMALL_SIZE
+                    )
                 
-                state_text = f"上次: {last_state_text}, 当前: {current_state_text}"
+                # 显示历史记录标题
+                history_text = "触发历史:"
                 frame = UIDrawer.put_chinese_text(
-                    frame, 
-                    state_text, 
-                    (UIConfig.HISTORY_POSITION_X, height - UIConfig.HISTORY_POSITION_Y), 
-                    UIConfig.COLOR_RED, 
-                    UIConfig.HISTORY_FONT_SIZE
+                    frame,
+                    history_text,
+                    (UIConfig.STATE_POSITION_X, height - UIConfig.BAR_Y_OFFSET - 110),
+                    UIConfig.COLOR_BLACK,
+                    UIConfig.FONT_SMALL_SIZE
                 )
-            
-        # 显示手势说明（右侧）
-        if viz_config.get('show_instructions', True):
-            instructions = [
-                "手势说明:",
-                "1. 从张开到握拳: 空格键",
-                "2. V手势向右滑动: 前进",
-                "3. V手势向左滑动: 后退",
-                "4. 拇指向上: 增加音量",
-                "5. 拇指向下: 减少音量"
-            ]
-            
-            for i, text in enumerate(instructions):
-                pos_y = UIConfig.INSTR_Y_START + i * UIConfig.INSTR_LINE_SPACING
-                frame = UIDrawer.put_chinese_text(
-                    frame, 
-                    text, 
-                    (width - UIConfig.INSTR_X_OFFSET, pos_y), 
-                    UIConfig.COLOR_BLACK, 
-                    UIConfig.INSTR_FONT_SIZE
-                )
+                
+                # 获取颜色配置
+                history_colors = viz_config.get('history_colors', {})
+                space_key_color = tuple(history_colors.get('space_key', [0, 0, 255]))     # 默认红色
+                volume_keys_color = tuple(history_colors.get('volume_keys', [0, 255, 0]))  # 默认绿色
+                direction_keys_color = tuple(history_colors.get('direction_keys', [255, 0, 255]))  # 默认紫色
+                
+                # 显示最近的5条触发记录（从新到旧）
+                for i, trigger in enumerate(reversed(trigger_history[-5:])):
+                    # 根据触发类型选择颜色
+                    if "空格键" in trigger:
+                        color = space_key_color
+                    elif "音量" in trigger:
+                        color = volume_keys_color
+                    else:  # 方向键
+                        color = direction_keys_color
+                    
+                    trigger_text = f"{5-i}. {trigger}"
+                    frame = UIDrawer.put_chinese_text(
+                        frame,
+                        trigger_text,
+                        (UIConfig.STATE_POSITION_X, height - UIConfig.BAR_Y_OFFSET - 90 + i * 15),
+                        color,
+                        UIConfig.FONT_SMALL_SIZE - 2  # 更小的字体
+                    )
         
         return frame
     
@@ -397,8 +385,7 @@ class UIDrawer:
         """
         绘制手部关键点、轨迹和相关信息
         
-        在图像上绘制MediaPipe检测到的手部关键点、连接线、跟踪点和手势轨迹，
-        并显示V手势相关状态信息和方向指示。
+        在图像上绘制MediaPipe检测到的手部关键点、连接线、跟踪点和手势轨迹。
         
         Args:
             frame: 输入图像帧
@@ -453,19 +440,6 @@ class UIDrawer:
                     
                     # 绘制拇指状态线 - 从拇指掌指关节到拇指尖的线
                     cv2.line(frame, thumb_mcp, thumb_tip, thumb_color, 4)
-                    
-                    # 在拇指附近显示状态文本
-                    text_pos_x = thumb_tip[0] + UIConfig.THUMB_TEXT_OFFSET_X
-                    text_pos_y = thumb_tip[1] + UIConfig.THUMB_TEXT_OFFSET_Y
-                    status_text = "音量+" if is_thumb_up else "音量-"
-                    
-                    frame = UIDrawer.put_chinese_text(
-                        frame,
-                        status_text,
-                        (text_pos_x, text_pos_y),
-                        thumb_color,
-                        UIConfig.THUMB_FONT_SIZE
-                    )
                 
                 # 获取食指和中指指尖位置
                 index_tip = (int(landmarks[8].x * width), int(landmarks[8].y * height))
@@ -483,56 +457,6 @@ class UIDrawer:
                 
                 # 绘制跟踪点（较大圆圈）
                 cv2.circle(frame, tracking_point, UIConfig.TRACKING_POINT_SIZE, UIConfig.COLOR_PURPLE, -1)
-                
-                # 如果有V手势滑动，显示相关信息
-                if viz_config.get('show_vsign_info', True):
-                    # 滑动方向信息
-                    if extra_info.get("vsign_swiped", False):
-                        direction = extra_info.get("swipe_direction")
-                        if direction:
-                            direction_text = f"滑动: {'右' if direction == 'right' else '左'}"
-                            frame = UIDrawer.put_chinese_text(
-                                frame, 
-                                direction_text, 
-                                (UIConfig.DIRECTION_POSITION_X, UIConfig.DIRECTION_POSITION_Y), 
-                                UIConfig.COLOR_PURPLE, 
-                                UIConfig.VSIGN_FONT_SIZE
-                            )
-                    
-                    # 方向锁定状态
-                    lock_status = "已锁定" if direction_locked else "未锁定"
-                    lock_color = UIConfig.COLOR_RED if direction_locked else UIConfig.COLOR_GREEN
-                    frame = UIDrawer.put_chinese_text(
-                        frame, 
-                        f"方向: {lock_status}", 
-                        (UIConfig.LOCK_POSITION_X, UIConfig.LOCK_POSITION_Y), 
-                        lock_color, 
-                        UIConfig.LOCK_FONT_SIZE
-                    )
-                    
-                    # 显示复位状态
-                    reset_text = ""
-                    if direction_locked and swipe_complete:
-                        # 计算当前位置与屏幕中心的距离
-                        if extra_info and extra_info.get("tracking_point") is not None:
-                            current_pos = extra_info["tracking_point"]
-                            current_x = current_pos[0]  # 归一化的x坐标 (0-1)
-                            distance_to_center = abs(current_x - center_position)
-                            is_resetting = distance_to_center < reset_threshold
-                            
-                            if is_resetting:
-                                reset_text = "即将完成复位"
-                            else:
-                                reset_text = "请将手移回中心位置"
-                    
-                    if reset_text:
-                        frame = UIDrawer.put_chinese_text(
-                            frame, 
-                            reset_text, 
-                            (UIConfig.RESET_POSITION_X, UIConfig.RESET_POSITION_Y), 
-                            UIConfig.COLOR_YELLOW, 
-                            UIConfig.RESET_FONT_SIZE
-                        )
         
         # 绘制中心位置标记线
         if viz_config.get('show_center_line', True):

@@ -23,7 +23,7 @@ class GestureController:
     """手势控制器主类"""
     
     def __init__(self, config_path: str):
-        """
+        """q
         初始化手势控制器
         
         Args:
@@ -78,6 +78,11 @@ class GestureController:
         self.volume_level = 50  # 默认音量为50%
         self.volume_change_time = 0
         self.volume_display_duration = self.config.get('volume_display_duration', 2.0)  # 音量显示持续时间（秒）
+        
+        # 触发提示相关变量
+        self.trigger_notification = None
+        self.trigger_notification_time = 0
+        self.trigger_notification_duration = self.config.get('trigger_notification_duration', 1.0)  # 触发提示显示时间，默认1秒
         
     def _load_config(self, config_path: str) -> dict:
         """加载配置文件"""
@@ -161,64 +166,54 @@ class GestureController:
         ui_frame = frame.copy()
         
         # 绘制手部关键点
-        ui_frame = UIDrawer.draw_hand_landmarks(
-            frame=ui_frame,
-            landmarks_results=self.analyzer.last_results,
-            extra_info=extra_gestures,
-            mp_draw=self.analyzer.mp_draw,
-            mp_hands=self.analyzer.mp_hands,
-            center_position=self.analyzer.center_position,
-            reset_threshold=self.analyzer.reset_threshold,
-            direction_locked=self.analyzer.direction_locked,
-            swipe_complete=self.analyzer.swipe_complete,
-            position_history=self.analyzer.position_history,
-            viz_config=self.viz_config
-        )
+        if self.viz_config.get('show_landmarks', True):
+            ui_frame = UIDrawer.draw_hand_landmarks(
+                frame=ui_frame,
+                landmarks_results=self.analyzer.last_results,
+                extra_info=extra_gestures,
+                mp_draw=self.analyzer.mp_draw,
+                mp_hands=self.analyzer.mp_hands,
+                center_position=self.analyzer.center_position,
+                reset_threshold=self.analyzer.reset_threshold,
+                direction_locked=self.analyzer.direction_locked,
+                swipe_complete=self.analyzer.swipe_complete,
+                position_history=self.analyzer.position_history,
+                viz_config=self.viz_config
+            )
         
-        # 绘制UI
-        ui_frame = UIDrawer.draw_ui_elements(
-            frame=ui_frame,
-            state=state,
-            openness=openness,
-            fps=self.fps,
-            analyzer_instance=self.analyzer,
-            viz_config=self.viz_config
-        )
-        
-        # 如果启用了音量控制相关UI，绘制音量条
-        if self.viz_config.get('show_volume_bar', True):
-            ui_frame = UIDrawer.draw_volume_bar(ui_frame, self.volume_level)
+        # 初始化触发历史列表
+        if 'trigger_history' not in self.viz_config:
+            self.viz_config['trigger_history'] = []
         
         # 检查并触发动作 - 从张开到握拳触发空格键
         if is_transition:
             triggered = self.trigger.trigger_space()
-            if self.console_config.get('show_trigger_events', True):
-                print("触发空格键!")
-            
-            # 在画面上显示触发提示
-            if self.viz_config.get('show_trigger_info', True):
-                ui_frame = UIDrawer.draw_trigger_notification(
-                    frame=ui_frame,
-                    text="空格键!",
-                    y_offset=0,
-                    color=UIConfig.TRIGGER_TEXT_COLOR
-                )
+            if triggered:
+                if self.console_config.get('show_trigger_events', True):
+                    print("触发空格键!")
+                # 添加到触发历史
+                self.viz_config['trigger_history'].append("空格键")
+                # 保持历史记录最多10条
+                if len(self.viz_config['trigger_history']) > 10:
+                    self.viz_config['trigger_history'].pop(0)
+                # 设置触发提示
+                self.trigger_notification = "空格键"
+                self.trigger_notification_time = time.time()
         
         # 检查V手势滑动手势
         if extra_gestures.get("vsign_swiped", False):
             direction = extra_gestures.get("swipe_direction")
             if direction:
                 self.trigger.trigger_direction_key(direction)
-                
-                # 在画面上显示触发提示
-                if self.viz_config.get('show_trigger_info', True):
-                    display_text = f"{'右' if direction == 'right' else '左'}方向键!"
-                    ui_frame = UIDrawer.draw_trigger_notification(
-                        frame=ui_frame,
-                        text=display_text,
-                        y_offset=UIConfig.TRIGGER_Y_OFFSET,
-                        color=UIConfig.TRIGGER_DIR_COLOR
-                    )
+                # 添加到触发历史
+                direction_text = f"{'右' if direction == 'right' else '左'}方向键"
+                self.viz_config['trigger_history'].append(direction_text)
+                # 保持历史记录最多10条
+                if len(self.viz_config['trigger_history']) > 10:
+                    self.viz_config['trigger_history'].pop(0)
+                # 设置触发提示
+                self.trigger_notification = direction_text
+                self.trigger_notification_time = time.time()
         
         # 检查拇指手势
         try:
@@ -234,42 +229,43 @@ class GestureController:
                 key_triggered = self.trigger.trigger_direction_key(volume_direction)
                 
                 if key_triggered:
-                    # 更新音量级别（模拟值）
-                    volume_change = self.config.get('volume_change_step', 5)  # 从配置中获取音量变化步长
-                    if volume_direction == "up":
-                        self.volume_level = min(100, self.volume_level + volume_change)
-                    else:
-                        self.volume_level = max(0, self.volume_level - volume_change)
-                    
-                    # 记录音量变化时间
-                    self.volume_change_time = time.time()
-                    
-                    # 在画面上显示音量提示
-                    if self.viz_config.get('show_trigger_info', True):
-                        display_text = f"音量: {self.volume_level}%"
-                        ui_frame = UIDrawer.draw_trigger_notification(
-                            frame=ui_frame,
-                            text=display_text,
-                            y_offset=-UIConfig.TRIGGER_Y_OFFSET,
-                            color=UIConfig.COLOR_CYAN
-                        )
+                    # 添加到触发历史
+                    volume_text = "音量增加" if volume_direction == "up" else "音量减少"
+                    self.viz_config['trigger_history'].append(volume_text)
+                    # 保持历史记录最多10条
+                    if len(self.viz_config['trigger_history']) > 10:
+                        self.viz_config['trigger_history'].pop(0)
+                    # 设置触发提示
+                    self.trigger_notification = volume_text
+                    self.trigger_notification_time = time.time()
                     
                     # 记录到控制台
                     if self.console_config.get('show_volume_events', True):
-                        print(f"音量{'增加' if volume_direction == 'up' else '减少'}到 {self.volume_level}%")
+                        print(f"音量{'增加' if volume_direction == 'up' else '减少'}")
         
-            # 检查是否需要继续显示音量信息
-            elif time.time() - self.volume_change_time < self.volume_display_duration:
-                display_text = f"音量: {self.volume_level}%"
-                ui_frame = UIDrawer.draw_trigger_notification(
-                    frame=ui_frame,
-                    text=display_text,
-                    y_offset=-UIConfig.TRIGGER_Y_OFFSET,
-                    color=UIConfig.COLOR_CYAN
-                )
         except Exception as e:
             if self.console_config.get('show_error_messages', True):
                 print(f"音量控制处理异常: {e}")
+        
+        # 检查触发提示是否过期
+        current_time = time.time()
+        if self.trigger_notification and (current_time - self.trigger_notification_time) > self.trigger_notification_duration:
+            self.trigger_notification = None
+        
+        # 传递历史颜色配置
+        if 'history_colors' in self.config.get('visualization', {}):
+            self.viz_config['history_colors'] = self.config['visualization']['history_colors']
+        
+        # 绘制UI
+        ui_frame = UIDrawer.draw_ui_elements(
+            frame=ui_frame,
+            state=state,
+            openness=openness,
+            fps=self.fps,
+            analyzer_instance=self.analyzer,
+            viz_config=self.viz_config,
+            trigger_notification=self.trigger_notification  # 传递触发提示
+        )
         
         return ui_frame
     
