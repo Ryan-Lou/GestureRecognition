@@ -230,18 +230,18 @@ class GestureController:
                 
                 if key_triggered:
                     # 添加到触发历史
-                    volume_text = "音量增加" if volume_direction == "up" else "音量减少"
-                    self.viz_config['trigger_history'].append(volume_text)
+                    direction_text = f"{'上' if volume_direction == 'up' else '下'}方向键"
+                    self.viz_config['trigger_history'].append(direction_text)
                     # 保持历史记录最多10条
                     if len(self.viz_config['trigger_history']) > 10:
                         self.viz_config['trigger_history'].pop(0)
                     # 设置触发提示
-                    self.trigger_notification = volume_text
+                    self.trigger_notification = direction_text
                     self.trigger_notification_time = time.time()
                     
                     # 记录到控制台
                     if self.console_config.get('show_volume_events', True):
-                        print(f"音量{'增加' if volume_direction == 'up' else '减少'}")
+                        print(f"触发{direction_text}")
         
         except Exception as e:
             if self.console_config.get('show_error_messages', True):

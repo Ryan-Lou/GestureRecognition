@@ -27,12 +27,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "DeepSeek论文章节生成指南优化版.md",
+                "file": "算法分析.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "DeepSeek论文章节生成指南优化版"
+              "title": "算法分析"
             }
           }
         ],
@@ -185,14 +185,16 @@
   },
   "active": "74441c454baae26e",
   "lastOpenFiles": [
-    "DeepSeek章节生成指南.md",
     "GestureSystem_Overview.md",
+    "DeepSeek章节生成指南.md",
+    "算法分析.md",
     "TeacherREADME.md",
+    "手势控制系统核心算法分析.md",
+    "DeepSeek论文章节生成指南优化版.md",
+    "ppt.md",
+    "未命名.md",
     "README.md",
     "src/image.jpg",
-    "DeepSeek论文章节生成指南优化版.md",
-    "手势控制系统论文指导.md",
-    "手势控制系统论文提纲.md",
-    "手势控制系统核心算法分析.md"
+    "手势控制系统论文提纲.md"
   ]
 }

@@ -8,8 +8,7 @@ vsign_trigger_threshold: 0.2  # V-sign手势滑动触发阈值（屏幕宽度的
 thumb_consecutive_required: 5  # 拇指手势需要连续几帧才能触发，减少误触
 thumb_gesture_cooldown: 30  # 拇指手势冷却帧数
 trigger_notification_duration: 1.0  # 触发提示显示持续时间（秒）
-volume_change_step: 5   # 每次音量变化步长（%）
-volume_display_duration: 2.0  # 音量变化显示持续时间（秒）
+
 
 # 位置控制参数
 center_position: 0.5  # 屏幕中心位置（归一化坐标，范围0-1）
